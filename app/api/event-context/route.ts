@@ -1,6 +1,7 @@
 import type { NextResponse } from 'next/server';
 import type { EventContextSnapshot } from '../../../lib/strategy-types';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { loadEventContext, parseRequiredEventKey } from '../../../lib/server-data';
 
 export const runtime = 'nodejs';
@@ -16,29 +17,39 @@ export async function GET(
     const eventKey = parseRequiredEventKey(searchParams.get('eventKey') ?? '');
     const eventContext = await loadEventContext(eventKey);
 
-    return routeJson(
-      routeContext,
-      {
-        generatedAtMs: Date.now(),
-        inputs: {
-          eventKey,
-        },
-        tba: {
-          event: eventContext.tba.event,
-          matches: eventContext.tba.matches,
-          rankings: eventContext.tba.rankings,
-          oprs: eventContext.tba.oprs,
-          alliances: eventContext.tba.alliances,
-          status: eventContext.tba.status,
-          insights: eventContext.tba.insights,
-          awards: eventContext.tba.awards,
-          teams: eventContext.tba.teams,
-        },
-        sb: eventContext.sb,
+    const payload: EventContextSnapshot = {
+      generatedAtMs: Date.now(),
+      inputs: {
+        eventKey,
       },
-      undefined,
-      { eventKey },
-    );
+      tba: {
+        event: eventContext.tba.event,
+        matches: eventContext.tba.matches,
+        rankings: eventContext.tba.rankings,
+        oprs: eventContext.tba.oprs,
+        alliances: eventContext.tba.alliances,
+        status: eventContext.tba.status,
+        insights: eventContext.tba.insights,
+        awards: eventContext.tba.awards,
+        teams: eventContext.tba.teams,
+      },
+      sb: eventContext.sb,
+      official: eventContext.official ?? null,
+      nexus: eventContext.nexus ?? null,
+      media: eventContext.media ?? null,
+      validation: eventContext.validation ?? null,
+      liveSignals: eventContext.liveSignals ?? [],
+    };
+
+    void saveSnapshotCacheRecord({
+      source: 'event_context',
+      eventKey,
+      teamNumber: null,
+      generatedAt: payload.generatedAtMs,
+      payload,
+    });
+
+    return routeJson(routeContext, payload, undefined, { eventKey });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown event-context error';
     const status = message === 'Missing TBA_AUTH_KEY in .env.local' ? 500 : 400;

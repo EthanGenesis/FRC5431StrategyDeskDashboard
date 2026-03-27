@@ -248,7 +248,12 @@ function buildSnapshotPayload() {
       teamKey: 'frc5431',
     },
     tba: {
-      event: { key: EVENT_KEY, name: 'Test Regional', week: 1 },
+      event: {
+        key: EVENT_KEY,
+        name: 'Test Regional',
+        week: 1,
+        webcasts: [{ type: 'youtube', channel: 'dQw4w9WgXcQ', file: null }],
+      },
       matches: [match],
       rankings: {
         sort_order_info: [{ name: 'RP' }],
@@ -297,6 +302,107 @@ function buildSnapshotPayload() {
       teamEvents: TEAM_NUMBERS.map((teamNumber, index) => buildSbTeamEvent(teamNumber, index + 1)),
       teamMatches: [],
     },
+    official: {
+      status: 'available',
+      event: { name: 'Test Regional', nameShort: 'Test Regional', dateStart: '2026-03-27' },
+      matches: [match],
+      rankings: {
+        Rankings: TEAM_NUMBERS.map((teamNumber, index) => ({
+          teamNumber,
+          rank: index + 1,
+        })),
+      },
+      awards: [{ teamNumber: 5431, awardName: 'Imagery Award' }],
+      district: { districtCode: 'FIT', districtName: 'FIRST in Texas' },
+    },
+    nexus: {
+      supported: true,
+      status: 'available',
+      currentMatchKey: `${EVENT_KEY}_qm1`,
+      nextMatchKey: `${EVENT_KEY}_qm2`,
+      queueMatchesAway: 1,
+      queueText: 'Queue 1 away',
+      pitMapUrl: 'https://example.com/pitmap',
+      announcements: [
+        {
+          id: 'announcement-1',
+          title: 'Field reset',
+          body: 'Field reset in progress.',
+          createdAtMs: 1_710_000_000_000,
+        },
+      ],
+      partsRequests: [
+        {
+          id: 'parts-1',
+          teamNumber: 5431,
+          pitId: 'P-12',
+          text: 'Need 1/4-20 hardware',
+          status: 'open',
+        },
+      ],
+      inspectionSummary: { passed: 20, pending: 5, failed: 1 },
+      pits: [],
+      raw: {
+        status: { supported: true },
+        pits: [],
+        pitMap: { url: 'https://example.com/pitmap' },
+        inspection: [],
+        announcements: [],
+        partsRequests: [],
+      },
+    },
+    media: {
+      preferredWebcastUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      webcasts: [
+        {
+          type: 'youtube',
+          channel: 'dQw4w9WgXcQ',
+          file: null,
+          url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          embedUrl: 'https://www.youtube.com/embed/dQw4w9WgXcQ',
+        },
+      ],
+      media: [
+        {
+          type: 'image',
+          foreign_key: 'frc5431',
+          details: 'Pit scouting image',
+          direct_url: 'https://example.com/media/pit-image',
+        },
+      ],
+    },
+    validation: {
+      generatedAtMs: 1_710_000_000_000,
+      firstStatus: 'available',
+      nexusStatus: 'available',
+      discrepancies: [
+        {
+          key: 'award_count',
+          label: 'Awards',
+          status: 'mismatch',
+          workingValue: '0',
+          officialValue: '1',
+          detail: 'Working award count vs FIRST official awards count.',
+        },
+      ],
+      staleSeconds: 12,
+      officialTimestamp: '2026-03-27',
+      summary: '1 official discrepancy',
+    },
+    liveSignals: [
+      {
+        id: 'signal-1',
+        workspaceKey: `event:${EVENT_KEY}`,
+        eventKey: EVENT_KEY,
+        source: 'tba_webhook',
+        signalType: 'upcoming_match',
+        title: 'Upcoming match',
+        body: `${EVENT_KEY}_qm2`,
+        dedupeKey: `${EVENT_KEY}::upcoming_match`,
+        createdAtMs: 1_710_000_000_000,
+        payload: null,
+      },
+    ],
   };
 }
 
@@ -483,6 +589,11 @@ async function mockDashboardApis(page: Page) {
           inputs: { eventKey: EVENT_KEY },
           tba: snapshot.tba,
           sb: snapshot.sb,
+          official: snapshot.official,
+          nexus: snapshot.nexus,
+          media: snapshot.media,
+          validation: snapshot.validation,
+          liveSignals: snapshot.liveSignals,
         },
       });
       return;
@@ -621,4 +732,18 @@ test('district tabs show FIT-only unavailable state for non-FIT events', async (
   await page.getByRole('button', { name: 'HISTORICAL' }).click();
   await page.getByRole('button', { name: 'DISTRICT', exact: true }).click();
   await expect(page.getByText('FIT District Only')).toBeVisible();
+});
+
+test('event tab exposes ops, validation, media, and external tool surfaces', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+
+  await expect(page.getByText('Ops + Live Signals')).toBeVisible();
+  await expect(page.getByText('Official Validation')).toBeVisible();
+  await expect(page.getByText('Webcast + Media')).toBeVisible();
+  await expect(page.getByText('External Tools')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Webcast' })).toBeVisible();
+  await expect(page.getByText('Queue 1 away').first()).toBeVisible();
+  await expect(page.getByText('1 official discrepancy')).toBeVisible();
 });

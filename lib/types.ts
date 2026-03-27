@@ -24,6 +24,107 @@ export type MatchSimple = {
   actual_time: number | null;
   post_result_time?: number | null;
   score_breakdown?: Record<string, unknown> | null;
+  videos?: ExternalArray | null;
+};
+
+export type EventMediaEntry = {
+  type: string;
+  channel: string;
+  file: string | null;
+  url: string | null;
+  embedUrl: string | null;
+};
+
+export type EventMediaSnapshot = {
+  preferredWebcastUrl: string | null;
+  webcasts: EventMediaEntry[];
+  media: ExternalArray;
+};
+
+export type SourceStatus = 'available' | 'disabled' | 'unsupported' | 'error';
+
+export type SourceDiscrepancy = {
+  key: string;
+  label: string;
+  status: 'match' | 'mismatch' | 'missing';
+  workingValue: string | null;
+  officialValue: string | null;
+  detail: string | null;
+};
+
+export type ValidationSnapshot = {
+  generatedAtMs: number;
+  firstStatus: SourceStatus;
+  nexusStatus: SourceStatus;
+  discrepancies: SourceDiscrepancy[];
+  staleSeconds: number | null;
+  officialTimestamp: string | null;
+  summary: string;
+};
+
+export type NexusAnnouncement = {
+  id: string;
+  title: string;
+  body: string;
+  createdAtMs: number | null;
+};
+
+export type NexusPartsRequest = {
+  id: string;
+  teamNumber: number | null;
+  pitId: string | null;
+  text: string;
+  status: string | null;
+};
+
+export type NexusInspectionSummary = {
+  passed: number | null;
+  pending: number | null;
+  failed: number | null;
+};
+
+export type NexusOpsSnapshot = {
+  supported: boolean;
+  status: SourceStatus;
+  currentMatchKey: string | null;
+  nextMatchKey: string | null;
+  queueMatchesAway: number | null;
+  queueText: string | null;
+  pitMapUrl: string | null;
+  announcements: NexusAnnouncement[];
+  partsRequests: NexusPartsRequest[];
+  inspectionSummary: NexusInspectionSummary | null;
+  pits: ExternalArray;
+  raw: {
+    status: ExternalRecord | null;
+    pits: ExternalArray;
+    pitMap: ExternalRecord | null;
+    inspection: ExternalArray;
+    announcements: ExternalArray;
+    partsRequests: ExternalArray;
+  };
+};
+
+export type OfficialEventSnapshot = {
+  status: SourceStatus;
+  event: ExternalRecord | null;
+  matches: ExternalArray;
+  rankings: ExternalRecord | null;
+  awards: ExternalArray;
+  district: ExternalRecord | null;
+};
+
+export type LiveSignal = {
+  id: string;
+  workspaceKey: string;
+  eventKey: string;
+  source: string;
+  signalType: string;
+  title: string;
+  body: string;
+  dedupeKey: string | null;
+  createdAtMs: number;
+  payload: ExternalRecord | null;
 };
 
 export type AppSnapshot = {
@@ -41,7 +142,7 @@ export type AppSnapshot = {
     alliances: ExternalRecord | null;
     status: ExternalRecord | null;
     insights: ExternalRecord | null;
-    awards: ExternalRecord | null;
+    awards: ExternalArray;
     teams: ExternalArray | null;
     teamStatuses?: ExternalRecord | null;
   };
@@ -50,6 +151,11 @@ export type AppSnapshot = {
     teamEvents: ExternalArray;
     teamMatches: ExternalArray;
   };
+  official?: OfficialEventSnapshot | null;
+  nexus?: NexusOpsSnapshot | null;
+  media?: EventMediaSnapshot | null;
+  validation?: ValidationSnapshot | null;
+  liveSignals?: LiveSignal[];
 };
 
 export type AlertKind = 'QUEUE_5' | 'QUEUE_2' | 'QUEUE_1' | 'PLAYING_NOW';
@@ -288,7 +394,7 @@ export type DataSuperSnapshot = {
     rankings: ExternalRecord | null;
     alliances: ExternalRecord | null;
     status: ExternalRecord | null;
-    awards: ExternalRecord | null;
+    awards: ExternalArray;
   } | null;
   historicalTeam: ExternalRecord | null;
   compare: TeamCompareSnapshot | null;

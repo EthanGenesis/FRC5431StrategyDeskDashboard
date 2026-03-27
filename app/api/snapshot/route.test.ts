@@ -38,6 +38,11 @@ describe('/api/snapshot', () => {
         teamEvents: [],
         teamMatches: [],
       },
+      official: null,
+      nexus: null,
+      media: null,
+      validation: null,
+      liveSignals: [],
     });
 
     const response = await GET(
@@ -45,6 +50,11 @@ describe('/api/snapshot', () => {
     );
     const body = (await response.json()) as {
       inputs: { eventKey: string; team: number; teamKey: string };
+      official: unknown;
+      nexus: unknown;
+      media: unknown;
+      validation: unknown;
+      liveSignals: unknown[];
     };
 
     expect(response.status).toBe(200);
@@ -53,6 +63,11 @@ describe('/api/snapshot', () => {
       team: 5431,
       teamKey: 'frc5431',
     });
+    expect(body.official).toBeNull();
+    expect(body.nexus).toBeNull();
+    expect(body.media).toBeNull();
+    expect(body.validation).toBeNull();
+    expect(body.liveSignals).toEqual([]);
     expect(serverDataMocks.loadEventContext).toHaveBeenCalledWith('2026miket');
   });
 

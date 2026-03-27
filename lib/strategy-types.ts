@@ -1,3 +1,11 @@
+import type {
+  EventMediaSnapshot,
+  LiveSignal,
+  NexusOpsSnapshot,
+  OfficialEventSnapshot,
+  ValidationSnapshot,
+} from './types';
+
 export type StrategyStatus = 'draft' | 'final';
 
 type ExternalRecord = Record<string, unknown>;
@@ -101,7 +109,7 @@ export type EventContextSnapshot = {
     alliances: ExternalRecord | null;
     status: ExternalRecord | null;
     insights: ExternalRecord | null;
-    awards: ExternalRecord | null;
+    awards: ExternalArray;
     teams: ExternalArray | null;
   };
   sb: {
@@ -109,6 +117,11 @@ export type EventContextSnapshot = {
     teamEvents: ExternalArray;
     teamMatches: ExternalArray;
   };
+  official?: OfficialEventSnapshot | null;
+  nexus?: NexusOpsSnapshot | null;
+  media?: EventMediaSnapshot | null;
+  validation?: ValidationSnapshot | null;
+  liveSignals?: LiveSignal[];
 };
 
 export type TeamProfileMatch = {

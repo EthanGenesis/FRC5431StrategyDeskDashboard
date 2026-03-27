@@ -17,6 +17,13 @@ This repo is currently a `Next.js 16` app that already depends on `TBA_AUTH_KEY`
 - [lib/persistence-types.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/persistence-types.ts)
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
 
+Optional live-ops integrations added in the final major pass:
+
+- TBA webhook receiver: `POST /api/webhook/tba`
+- FIRST official API cross-check support
+- Nexus event-ops support
+- Supabase Realtime for event-scoped collaboration and live desk updates
+
 Official platform references:
 
 - GitHub: `https://docs.github.com/en/repositories/creating-and-managing-repositories/quickstart-for-repositories`
@@ -80,6 +87,15 @@ copy .env.example .env.local
 Fill in at least:
 
 - `TBA_AUTH_KEY`
+
+Optional but recommended for the final live-ops pass:
+
+- `TBA_WEBHOOK_SECRET`
+- `FIRST_API_BASE_URL`
+- `FIRST_API_USERNAME`
+- `FIRST_API_AUTH_TOKEN`
+- `NEXUS_API_BASE_URL`
+- `NEXUS_API_KEY`
 
 Do not commit `.env.local`.
 
@@ -167,8 +183,12 @@ This creates:
 - `tbsb_pick_lists`
 - `tbsb_playoff_results`
 - `tbsb_strategy_records`
+- `tbsb_event_live_signals`
+- `tbsb_source_validation`
 - `tbsb_snapshot_cache`
 - `tbsb_upstream_cache`
+
+It also adds the required Supabase Realtime publication entries for the shared desk tables. If you ran an older version before Realtime support existed, rerun the latest SQL so the publication includes the live-collaboration tables.
 
 ## 4. Fill Local Supabase Env Vars
 
@@ -180,6 +200,12 @@ TBA_AUTH_KEY=...
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+TBA_WEBHOOK_SECRET=
+FIRST_API_BASE_URL=https://frc-api.firstinspires.org/v3.0
+FIRST_API_USERNAME=
+FIRST_API_AUTH_TOKEN=
+NEXUS_API_BASE_URL=https://frc.nexus/api/v1
+NEXUS_API_KEY=
 
 APP_LOG_LEVEL=info
 OTEL_ENABLED=false
@@ -211,6 +237,13 @@ Add environment variables in Vercel for `Production`, and preferably also `Previ
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- optional live-ops vars:
+  - `TBA_WEBHOOK_SECRET`
+  - `FIRST_API_BASE_URL`
+  - `FIRST_API_USERNAME`
+  - `FIRST_API_AUTH_TOKEN`
+  - `NEXUS_API_BASE_URL`
+  - `NEXUS_API_KEY`
 - optional:
   - `APP_LOG_LEVEL`
   - `OTEL_ENABLED`
@@ -243,9 +276,18 @@ Supabase-specific checks:
 
 - public visitors can read shared data
 - public visitors can write shared workspace data
+- same-event collaboration updates propagate through Supabase Realtime
 - snapshot and upstream cache rows are still written only from trusted server-side code
+- `tbsb_event_live_signals` receives TBA webhook/live desk events
+- `tbsb_source_validation` stores the official-vs-working validation snapshot per event workspace
 - shared workspace rows exist in Supabase
 - snapshot / cache rows can be written server-side
+
+Optional live-ops checks:
+
+- `POST /api/webhook/tba` accepts a valid TBA webhook payload and appends a row to `tbsb_event_live_signals`
+- FIRST official credentials unlock visible overlap checks in the `EVENT` workspace
+- Nexus credentials unlock queue/announcements/parts/pit map/inspection panels where supported
 
 GitHub/Vercel checks:
 

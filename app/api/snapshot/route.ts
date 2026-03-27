@@ -1,6 +1,7 @@
 import type { NextResponse } from 'next/server';
 import type { AppSnapshot } from '../../../lib/types';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import {
   parsePositiveTeamNumber,
   parseRequiredEventKey,
@@ -20,24 +21,34 @@ export async function GET(req: Request): Promise<NextResponse<AppSnapshot | { er
     const teamKey = `frc${team}`;
     const eventContext = await loadEventContext(eventKey);
 
-    return routeJson(
-      routeContext,
-      {
-        generatedAtMs: Date.now(),
-        inputs: {
-          eventKey,
-          team,
-          teamKey,
-        },
-        tba: eventContext.tba,
-        sb: eventContext.sb,
-      },
-      undefined,
-      {
+    const payload: AppSnapshot = {
+      generatedAtMs: Date.now(),
+      inputs: {
         eventKey,
         team,
+        teamKey,
       },
-    );
+      tba: eventContext.tba,
+      sb: eventContext.sb,
+      official: eventContext.official ?? null,
+      nexus: eventContext.nexus ?? null,
+      media: eventContext.media ?? null,
+      validation: eventContext.validation ?? null,
+      liveSignals: eventContext.liveSignals ?? [],
+    };
+
+    void saveSnapshotCacheRecord({
+      source: 'snapshot',
+      eventKey,
+      teamNumber: team,
+      generatedAt: payload.generatedAtMs,
+      payload,
+    });
+
+    return routeJson(routeContext, payload, undefined, {
+      eventKey,
+      team,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Missing or invalid eventKey/team';
     const status =

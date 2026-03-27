@@ -63,5 +63,6 @@ npm run test:e2e
 - `docs/OPERATIONS.md` documents quality gates, security/config expectations, and troubleshooting.
 - `docs/DEPLOYMENT_RUNBOOK.md` documents the GitHub + Supabase + Vercel production setup path.
 - The intended production model is now a trusted shared-link deployment with Supabase as the primary saved-data store, using event-scoped shared workspaces plus session-only personal preferences.
+- The final major pass adds optional FIRST official API, Nexus event-ops, TBA webhook ingest, webcast/media surfaces, and Supabase Realtime collaboration.
 - CI now enforces format, lint, dependency boundaries, typecheck, tests, build, Playwright smoke, and a production dependency audit threshold.
 - The app still contains some JS/JSX implementation surfaces, but the repo now enforces stricter typing, linting, tests, security headers, and route-level boundary protection around them while the remaining migration continues.

@@ -7,6 +7,7 @@ import { createSupabaseBrowserClient } from './supabase-browser';
 import { isSupabaseConfigured } from './supabase';
 import type { StrategyRecord, StrategyRecordSummary } from './strategy-types';
 import type { CompareDraft, CompareSet, SettingsState } from './types';
+import { getEventWorkspaceKey } from './workspace-key';
 
 type CompareDraftScope = 'current' | 'historical';
 
@@ -102,13 +103,6 @@ function normalizeWorkspaceSettingsPayload(value: unknown): WorkspaceSettingsSta
       ...parsedWeights,
     },
   };
-}
-
-export function getEventWorkspaceKey(eventKey: string | null | undefined): string | null {
-  const normalized = String(eventKey ?? '')
-    .trim()
-    .toLowerCase();
-  return normalized ? `event:${normalized}` : null;
 }
 
 export function mergeWorkspaceSettingsIntoSettings(

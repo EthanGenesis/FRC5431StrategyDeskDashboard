@@ -1307,8 +1307,8 @@ textarea:focus-visible {
     display: none !important;
   }
 
-  .app-shell > :not(.strategy-print-root),
-  .dashboard-page-view > :not(.strategy-print-root) {
+  .app-shell > :not(.strategy-print-root):not(.event-print-root),
+  .dashboard-page-view > :not(.strategy-print-root):not(.event-print-root) {
     display: none !important;
   }
 
@@ -1317,7 +1317,9 @@ textarea:focus-visible {
   }
 
   .strategy-print-root,
-  .strategy-print-root * {
+  .strategy-print-root *,
+  .event-print-root,
+  .event-print-root * {
     color: #111 !important;
   }
 
@@ -1325,13 +1327,19 @@ textarea:focus-visible {
   .strategy-print-root .panel-2,
   .strategy-print-root .input,
   .strategy-print-root .button,
-  .strategy-print-root .badge {
+  .strategy-print-root .badge,
+  .event-print-root .panel,
+  .event-print-root .panel-2,
+  .event-print-root .input,
+  .event-print-root .button,
+  .event-print-root .badge {
     background: #fff !important;
     border-color: #bbb !important;
     box-shadow: none !important;
   }
 
-  .strategy-print-root {
+  .strategy-print-root,
+  .event-print-root {
     margin: 0;
     padding: 0;
   }
@@ -1339,7 +1347,9 @@ textarea:focus-visible {
   .strategy-print-header,
   .strategy-notes-block,
   .strategy-board-grid,
-  .strategy-team-grid {
+  .strategy-team-grid,
+  .event-print-root .panel,
+  .event-print-root .disclosure-section {
     break-inside: avoid;
   }
 }

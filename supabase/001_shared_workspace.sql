@@ -87,6 +87,27 @@ create table if not exists public.tbsb_strategy_records (
   updated_by uuid references auth.users (id) on delete set null
 );
 
+create table if not exists public.tbsb_event_live_signals (
+  id uuid primary key default gen_random_uuid(),
+  workspace_key text not null,
+  event_key text not null,
+  source text not null,
+  signal_type text not null,
+  title text not null,
+  body text not null default '',
+  dedupe_key text,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.tbsb_source_validation (
+  workspace_key text primary key,
+  event_key text not null,
+  payload jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.tbsb_snapshot_cache (
   cache_key text primary key,
   source text not null,
@@ -126,6 +147,13 @@ create index if not exists tbsb_playoff_results_workspace_idx
 create index if not exists tbsb_strategy_records_workspace_event_idx
   on public.tbsb_strategy_records (workspace_key, event_key, updated_at desc);
 
+create index if not exists tbsb_event_live_signals_workspace_event_idx
+  on public.tbsb_event_live_signals (workspace_key, event_key, created_at desc);
+
+create unique index if not exists tbsb_event_live_signals_workspace_dedupe_idx
+  on public.tbsb_event_live_signals (workspace_key, dedupe_key)
+  where dedupe_key is not null;
+
 create index if not exists tbsb_snapshot_cache_source_event_team_idx
   on public.tbsb_snapshot_cache (source, event_key, team_number, updated_at desc);
 
@@ -140,6 +168,8 @@ alter table public.tbsb_alliance_scenarios enable row level security;
 alter table public.tbsb_pick_lists enable row level security;
 alter table public.tbsb_playoff_results enable row level security;
 alter table public.tbsb_strategy_records enable row level security;
+alter table public.tbsb_event_live_signals enable row level security;
+alter table public.tbsb_source_validation enable row level security;
 alter table public.tbsb_snapshot_cache enable row level security;
 alter table public.tbsb_upstream_cache enable row level security;
 
@@ -263,6 +293,20 @@ create policy "shared workspace write strategy records"
   using (public.tbsb_is_allowed_workspace_key(workspace_key))
   with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
+drop policy if exists "public read event live signals" on public.tbsb_event_live_signals;
+create policy "public read event live signals"
+  on public.tbsb_event_live_signals
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "public read source validation" on public.tbsb_source_validation;
+create policy "public read source validation"
+  on public.tbsb_source_validation
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
 drop policy if exists "public read snapshot cache" on public.tbsb_snapshot_cache;
 create policy "public read snapshot cache"
   on public.tbsb_snapshot_cache
@@ -280,3 +324,48 @@ create policy "public read upstream cache"
 insert into public.tbsb_workspace_settings (workspace_key, payload)
 values ('shared', '{}'::jsonb)
 on conflict (workspace_key) do nothing;
+
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table public.tbsb_workspace_settings;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_compare_drafts;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_compare_sets;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_predict_scenarios;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_alliance_scenarios;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_pick_lists;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_playoff_results;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_strategy_records;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_event_live_signals;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_source_validation;
+  exception when duplicate_object then null;
+  end;
+end
+$$;

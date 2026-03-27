@@ -24,6 +24,7 @@ The application is intentionally split by decision context rather than by raw da
 - [lib/analytics.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/analytics.ts) is the normalization and derived-metrics layer for event, season, compare, and rolling analytics.
 - [lib/analytics-registry.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/analytics-registry.ts) is the central metric registry plus chart/matrix projection helpers.
 - [lib/server-data.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/server-data.ts) is the shared server fetch/transform path for route handlers.
+- [lib/first-api.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/first-api.ts), [lib/nexus.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/nexus.ts), and [lib/source-cache-server.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/source-cache-server.ts) add official FIRST overlap checks, Nexus event-ops integration, and Supabase-backed source/cache persistence.
 - [lib/httpCache.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/httpCache.ts) is the safe response-reading and client fetch utility layer.
 
 ### Feature surfaces
@@ -42,8 +43,9 @@ Major routes live under `app/api` and follow the same pattern:
 
 1. Parse and validate request input.
 2. Load shared event/team context through server helpers.
-3. Build route-specific derived structures.
-4. Return stable JSON payloads that remain backward-compatible with the current UI.
+3. Merge TBA + Statbotics with optional FIRST official, Nexus, media, validation, and live-signal sections additively.
+4. Persist upstream/cache/live-signal state in Supabase where appropriate.
+5. Return stable JSON payloads that remain backward-compatible with the current UI.
 
 ### Client flow
 
@@ -79,6 +81,7 @@ The production migration baseline now adds:
 - [lib/supabase-server.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/supabase-server.ts)
 - [lib/persistence-surfaces.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/persistence-surfaces.ts)
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
+- [app/api/webhook/tba/route.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/app/api/webhook/tba/route.ts)
 
 This allows the app to move from browser-only persistence toward event-scoped shared Supabase workspaces without changing the public route structure.
 
@@ -87,6 +90,8 @@ Current deployment intent:
 - the deployed app is a trusted shared-link workspace
 - anyone with the link can use the current event workspace and save project artifacts
 - Supabase is the primary storage layer for saved project data
+- Supabase Realtime is the collaboration fanout path for same-event desk updates
+- TBA webhook events and source-validation snapshots are also persisted in Supabase
 - theme, language, loaded team, loaded event, and webhook settings are intentionally session-only instead of globally shared
 
 ### Scoped state

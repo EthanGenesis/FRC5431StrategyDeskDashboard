@@ -39,6 +39,27 @@ export type PersistedStrategyRecord = {
   updatedBy: string | null;
 };
 
+export type PersistedEventLiveSignalRecord = {
+  id: string;
+  workspaceKey: SharedWorkspaceKey;
+  eventKey: string;
+  source: string;
+  signalType: string;
+  title: string;
+  body: string;
+  dedupeKey: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PersistedSourceValidationRecord = {
+  workspaceKey: SharedWorkspaceKey;
+  eventKey: string;
+  payload: Record<string, unknown>;
+  updatedAt: string;
+};
+
 export type PersistedSnapshotCacheRecord = {
   cacheKey: string;
   source: string;

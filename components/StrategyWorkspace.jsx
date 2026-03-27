@@ -2,14 +2,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJsonOrThrow } from '../lib/httpCache';
 import { formatMatchLabel, safeNumber, sortMatches, teamNumberFromKey } from '../lib/logic';
+import { PERSISTENCE_TABLES } from '../lib/persistence-surfaces';
 import { makeStrategyRecordId } from '../lib/strategy-storage';
 import {
-  getEventWorkspaceKey,
   getStrategyRecordByIdShared,
   getStrategyRecordShared,
   listStrategyRecordsShared,
   saveStrategyRecordShared,
 } from '../lib/shared-workspace-browser';
+import { createSupabaseBrowserClient } from '../lib/supabase-browser';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { getEventWorkspaceKey } from '../lib/workspace-key';
 import StrategyBoard from './StrategyBoard';
 import DisclosureSection from './ui/DisclosureSection';
 const RED_MARKER_Y = [120, 250, 380];
@@ -165,6 +168,7 @@ export default function StrategyWorkspace({
   const [liveStatsLoading, setLiveStatsLoading] = useState(false);
   const [liveStatsError, setLiveStatsError] = useState('');
   const [recordLoaded, setRecordLoaded] = useState(false);
+  const [lastRemoteSyncAtMs, setLastRemoteSyncAtMs] = useState(null);
   const [autoPast, setAutoPast] = useState([]);
   const [autoFuture, setAutoFuture] = useState([]);
   const [teleopPast, setTeleopPast] = useState([]);
@@ -380,6 +384,58 @@ export default function StrategyWorkspace({
     },
     [selectedMatch],
   );
+  useEffect(() => {
+    if (!strategyWorkspaceKey || !isSupabaseConfigured()) return;
+
+    let cancelled = false;
+    const client = createSupabaseBrowserClient();
+
+    const refreshSavedStrategies = async () => {
+      try {
+        const rows = await listStrategyRecordsShared(strategyWorkspaceKey);
+        if (!cancelled) setSavedStrategies(rows);
+      } catch {}
+    };
+
+    const channel = client
+      .channel(`strategy-live:${strategyWorkspaceKey}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.strategyRecords },
+        async (payload) => {
+          const workspaceKey =
+            payload?.new?.workspace_key ??
+            payload?.old?.workspace_key ??
+            payload?.record?.workspace_key ??
+            null;
+          if (workspaceKey && String(workspaceKey) !== String(strategyWorkspaceKey)) return;
+
+          setLastRemoteSyncAtMs(Date.now());
+          await refreshSavedStrategies();
+
+          const changedId = payload?.new?.id ?? payload?.old?.id ?? null;
+          if (!changedId || !strategyMeta?.id || String(changedId) !== String(strategyMeta.id))
+            return;
+
+          try {
+            const latest = await getStrategyRecordByIdShared(strategyWorkspaceKey, changedId);
+            if (cancelled || !latest) return;
+
+            const latestJson = JSON.stringify(latest);
+            if (latestJson === lastSavedJsonRef.current) return;
+
+            setLoadedRecord(latest, true);
+            setAutosaveStatus('Live update received');
+          } catch {}
+        },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      void client.removeChannel(channel);
+    };
+  }, [setLoadedRecord, strategyMeta?.id, strategyWorkspaceKey]);
   useEffect(() => {
     if (!targetEventKey || !selectedMatch || !eventContext) {
       setRecordLoaded(false);
@@ -860,6 +916,11 @@ export default function StrategyWorkspace({
             <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
               {autosaveStatus}
             </div>
+            {lastRemoteSyncAtMs ? (
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                Shared sync {new Date(lastRemoteSyncAtMs).toLocaleTimeString()}
+              </div>
+            ) : null}
             {strategyMeta?.copiedFrom ? (
               <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
                 Copied From: {strategyMeta.copiedFrom.eventKey} / {strategyMeta.copiedFrom.matchKey}{' '}

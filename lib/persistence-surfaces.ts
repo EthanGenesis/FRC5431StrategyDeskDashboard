@@ -9,6 +9,8 @@ export const PERSISTENCE_TABLES = {
   pickLists: 'tbsb_pick_lists',
   playoffResults: 'tbsb_playoff_results',
   strategyRecords: 'tbsb_strategy_records',
+  eventLiveSignals: 'tbsb_event_live_signals',
+  sourceValidation: 'tbsb_source_validation',
   snapshotCache: 'tbsb_snapshot_cache',
   upstreamCache: 'tbsb_upstream_cache',
 } as const;

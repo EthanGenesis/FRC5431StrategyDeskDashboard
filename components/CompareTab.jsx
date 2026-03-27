@@ -17,12 +17,12 @@ import {
 } from '../lib/analytics-registry';
 import { DEFAULT_COMPARE_DRAFT } from '../lib/compare-storage';
 import {
-  getEventWorkspaceKey,
   loadCompareDraftForScope,
   loadCompareSetsShared,
   saveCompareDraftForScope,
   saveCompareSetsShared,
 } from '../lib/shared-workspace-browser';
+import { getEventWorkspaceKey } from '../lib/workspace-key';
 function uniqNumbers(values) {
   return Array.from(
     new Set(

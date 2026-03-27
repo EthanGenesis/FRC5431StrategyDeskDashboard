@@ -16,17 +16,19 @@ import PageHeader from '../ui/PageHeader';
 import ProductClock from '../ui/ProductClock';
 import DisclosureSection from '../ui/DisclosureSection';
 import DashboardPreferencesProvider from '../providers/DashboardPreferencesProvider';
+import { createSupabaseBrowserClient } from '../../lib/supabase-browser';
 import {
   addTeamToCompareDraftShared,
-  getEventWorkspaceKey,
   loadNamedArtifactsShared,
   loadWorkspaceSettings,
   mergeWorkspaceSettingsIntoSettings,
   saveNamedArtifactsShared,
   saveWorkspaceSettings,
 } from '../../lib/shared-workspace-browser';
+import { getEventWorkspaceKey } from '../../lib/workspace-key';
 import { fetchJsonOrThrow } from '../../lib/httpCache';
 import { PERSISTENCE_TABLES } from '../../lib/persistence-surfaces';
+import { isSupabaseConfigured } from '../../lib/supabase';
 import {
   allianceForTeam,
   bestCountdownUnix,
@@ -619,6 +621,11 @@ export default function HomePage() {
   const previousQueueStateRef = useRef(null);
   const previousOfflineModeRef = useRef(null);
   const snapshotHealthRef = useRef(null);
+  const skipSharedSettingsSaveRef = useRef(false);
+  const skipPredictSaveRef = useRef(false);
+  const skipAllianceSaveRef = useRef(false);
+  const skipPickListSaveRef = useRef(false);
+  const skipPlayoffSaveRef = useRef(false);
   const tab =
     majorTab === 'CURRENT'
       ? currentSubTab
@@ -640,6 +647,14 @@ export default function HomePage() {
 
   const activePageMeta = PAGE_META[majorTab]?.[tab] ?? PAGE_META.SETTINGS.SETTINGS;
   const language = settings.language ?? 'en';
+  const sourceValidation = snapshot?.validation ?? null;
+  const officialSnapshot = snapshot?.official ?? null;
+  const nexusSnapshot = snapshot?.nexus ?? null;
+  const mediaSnapshot = snapshot?.media ?? null;
+  const liveSignals = useMemo(
+    () => (Array.isArray(snapshot?.liveSignals) ? snapshot.liveSignals : []),
+    [snapshot?.liveSignals],
+  );
   const t = useCallback(
     (key, fallback, vars) => translate(language, key, fallback, vars),
     [language],
@@ -694,6 +709,32 @@ export default function HomePage() {
       competitionDayText,
     };
   }, [loadedEventKey, nowMs, snapshot?.tba?.event, t]);
+  const sourceStatusBadgeClass = (status) => {
+    if (status === 'available') return 'badge-green';
+    if (status === 'error') return 'badge-red';
+    return '';
+  };
+  const sourceStatusLabel = (status) => {
+    if (status === 'available') return t('status.available', 'Available');
+    if (status === 'error') return t('status.error', 'Error');
+    if (status === 'unsupported') return t('status.unsupported', 'Unsupported');
+    return t('status.disabled', 'Disabled');
+  };
+  const validationCounts = useMemo(() => {
+    const discrepancies = Array.isArray(sourceValidation?.discrepancies)
+      ? sourceValidation.discrepancies
+      : [];
+    return {
+      match: discrepancies.filter((item) => item.status === 'match').length,
+      mismatch: discrepancies.filter((item) => item.status === 'mismatch').length,
+      missing: discrepancies.filter((item) => item.status === 'missing').length,
+    };
+  }, [sourceValidation]);
+  const recentLiveSignals = useMemo(() => liveSignals.slice(0, 6), [liveSignals]);
+  const preferredWebcast = useMemo(
+    () => mediaSnapshot?.webcasts?.find((entry) => entry?.embedUrl || entry?.url) ?? null,
+    [mediaSnapshot],
+  );
   const webhookContextFields = useCallback(
     (extraFields = []) =>
       [
@@ -880,6 +921,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
       return;
+    if (skipSharedSettingsSaveRef.current) {
+      skipSharedSettingsSaveRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void saveWorkspaceSettings(activeWorkspaceKey, settings).catch((error) => {
         setErrorText(error?.message ?? 'Failed to save shared settings.');
@@ -895,6 +940,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
       return;
+    if (skipPredictSaveRef.current) {
+      skipPredictSaveRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void saveNamedArtifactsShared(
         PERSISTENCE_TABLES.predictScenarios,
@@ -909,6 +958,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
       return;
+    if (skipAllianceSaveRef.current) {
+      skipAllianceSaveRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void saveNamedArtifactsShared(
         PERSISTENCE_TABLES.allianceScenarios,
@@ -923,6 +976,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
       return;
+    if (skipPickListSaveRef.current) {
+      skipPickListSaveRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void saveNamedArtifactsShared(
         PERSISTENCE_TABLES.pickLists,
@@ -937,6 +994,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
       return;
+    if (skipPlayoffSaveRef.current) {
+      skipPlayoffSaveRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void saveNamedArtifactsShared(
         PERSISTENCE_TABLES.playoffResults,
@@ -1012,7 +1073,8 @@ export default function HomePage() {
     setSelectedMatchKey(null);
     setSelectedTeamNumber(null);
     setStrategyTarget(null);
-    setTeamProfileForcedTeamNumber(null);
+    setCurrentTeamProfileForcedTeamNumber(null);
+    setHistoricalTeamProfileForcedTeamNumber(null);
     setPredictOverrides({});
     fetchSnapshot(team, eventKey, 'manual');
   }
@@ -1025,6 +1087,138 @@ export default function HomePage() {
     );
     return () => window.clearInterval(id);
   }, [fetchSnapshot, loadedTeam, loadedEventKey, offlineMode, settings.pollMs]);
+  useEffect(() => {
+    if (!activeWorkspaceKey || !loadedEventKey || !isSupabaseConfigured()) return;
+
+    let cancelled = false;
+    const client = createSupabaseBrowserClient();
+
+    const matchesWorkspace = (payload) => {
+      const workspaceKey =
+        payload?.new?.workspace_key ??
+        payload?.old?.workspace_key ??
+        payload?.record?.workspace_key ??
+        null;
+      return !workspaceKey || String(workspaceKey) === String(activeWorkspaceKey);
+    };
+
+    const reloadWorkspaceSettings = async () => {
+      try {
+        const saved = await loadWorkspaceSettings(activeWorkspaceKey);
+        if (cancelled) return;
+        skipSharedSettingsSaveRef.current = true;
+        setSettings((prev) => mergeWorkspaceSettingsIntoSettings(prev, saved));
+      } catch {}
+    };
+
+    const reloadArtifacts = async (table, setter, skipRef) => {
+      try {
+        const rows = await loadNamedArtifactsShared(table, activeWorkspaceKey);
+        if (cancelled) return;
+        skipRef.current = true;
+        setter(rows);
+      } catch {}
+    };
+
+    const refreshLiveSnapshot = (payload) => {
+      const nextEventKey =
+        payload?.new?.event_key ?? payload?.record?.event_key ?? payload?.old?.event_key ?? null;
+      if (nextEventKey && String(nextEventKey) !== String(loadedEventKey)) return;
+      if (loadedTeam != null) {
+        void fetchSnapshot(loadedTeam, loadedEventKey, 'auto');
+      }
+    };
+
+    const channel = client
+      .channel(`workspace-live:${activeWorkspaceKey}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.workspaceSettings },
+        (payload) => {
+          if (matchesWorkspace(payload)) void reloadWorkspaceSettings();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.predictScenarios },
+        (payload) => {
+          if (matchesWorkspace(payload)) {
+            void reloadArtifacts(
+              PERSISTENCE_TABLES.predictScenarios,
+              setSavedPredictScenarios,
+              skipPredictSaveRef,
+            );
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.allianceScenarios },
+        (payload) => {
+          if (matchesWorkspace(payload)) {
+            void reloadArtifacts(
+              PERSISTENCE_TABLES.allianceScenarios,
+              setSavedAllianceScenarios,
+              skipAllianceSaveRef,
+            );
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.pickLists },
+        (payload) => {
+          if (matchesWorkspace(payload)) {
+            void reloadArtifacts(PERSISTENCE_TABLES.pickLists, setPickLists, skipPickListSaveRef);
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.playoffResults },
+        (payload) => {
+          if (matchesWorkspace(payload)) {
+            void reloadArtifacts(
+              PERSISTENCE_TABLES.playoffResults,
+              setSavedPlayoffResults,
+              skipPlayoffSaveRef,
+            );
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareDrafts },
+        (payload) => {
+          if (!matchesWorkspace(payload)) return;
+          setCurrentCompareSyncKey((value) => value + 1);
+          setHistoricalCompareSyncKey((value) => value + 1);
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareSets },
+        (payload) => {
+          if (!matchesWorkspace(payload)) return;
+          setCurrentCompareSyncKey((value) => value + 1);
+          setHistoricalCompareSyncKey((value) => value + 1);
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.eventLiveSignals },
+        (payload) => {
+          if (!matchesWorkspace(payload)) return;
+          refreshLiveSnapshot(payload);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      void client.removeChannel(channel);
+    };
+  }, [activeWorkspaceKey, fetchSnapshot, loadedEventKey, loadedTeam]);
   const sortedMatches = useMemo(() => sortMatches(snapshot?.tba?.matches ?? []), [snapshot]);
   const sbMatchMap = useMemo(() => {
     const map = new Map();
@@ -2961,6 +3155,32 @@ export default function HomePage() {
               <span className="badge dashboard-inline-chip">
                 {t('field.updated', 'Updated')} {lastUpdateText}
               </span>
+              {sourceValidation ? (
+                <span
+                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
+                    sourceValidation.firstStatus,
+                  )}`}
+                >
+                  FIRST {sourceStatusLabel(sourceValidation.firstStatus)}
+                </span>
+              ) : null}
+              {nexusSnapshot ? (
+                <span
+                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
+                    nexusSnapshot.status,
+                  )}`}
+                >
+                  Nexus {sourceStatusLabel(nexusSnapshot.status)}
+                </span>
+              ) : null}
+              {nexusSnapshot?.queueText ? (
+                <span className="badge dashboard-inline-chip">{nexusSnapshot.queueText}</span>
+              ) : null}
+              {liveSignals.length ? (
+                <span className="badge dashboard-inline-chip">
+                  {t('field.signals', 'Signals')} {liveSignals.length}
+                </span>
+              ) : null}
               {isLoading ? (
                 <span className="badge badge-green dashboard-inline-chip">
                   {t('status.syncing', 'Syncing')}
@@ -3280,6 +3500,159 @@ export default function HomePage() {
               onOpenTeamProfile={openTeamProfile}
               scope="current"
             />
+          </DisclosureSection>
+        ) : null}
+        {nexusSnapshot || recentLiveSignals.length || preferredWebcast ? (
+          <DisclosureSection
+            storageKey="ui.current.now.live_ops"
+            title="Live Ops Feed"
+            description="Queue context, webhook/live signals, and webcast access for the active event."
+            defaultOpen
+          >
+            <div className="grid-2">
+              <div className="stack-12">
+                <div className="panel" style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Desk Ops Summary</div>
+                  <div className="grid-3">
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Queue
+                      </div>
+                      <div style={{ fontWeight: 900, fontSize: 20 }}>
+                        {nexusSnapshot?.queueText ?? 'No Nexus queue feed'}
+                      </div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Announcements
+                      </div>
+                      <div style={{ fontWeight: 900, fontSize: 20 }}>
+                        {nexusSnapshot?.announcements?.length ?? 0}
+                      </div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Live Signals
+                      </div>
+                      <div style={{ fontWeight: 900, fontSize: 20 }}>{liveSignals.length}</div>
+                    </div>
+                  </div>
+                  <div className="grid-2" style={{ marginTop: 12 }}>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Parts Requests
+                      </div>
+                      <div style={{ fontWeight: 900 }}>
+                        {nexusSnapshot?.partsRequests?.length ?? 0}
+                      </div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Inspection
+                      </div>
+                      <div style={{ fontWeight: 900 }}>
+                        {nexusSnapshot?.inspectionSummary
+                          ? `P ${nexusSnapshot.inspectionSummary.passed ?? 0} / Pending ${
+                              nexusSnapshot.inspectionSummary.pending ?? 0
+                            } / F ${nexusSnapshot.inspectionSummary.failed ?? 0}`
+                          : 'No inspection feed'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <AnalyticsChartBlock
+                  title="Ops Readiness Board"
+                  description="Quick ops pressure view for queue, announcements, parts, inspections, and live signals."
+                  data={[
+                    {
+                      label: 'Signals',
+                      value: liveSignals.length,
+                    },
+                    {
+                      label: 'Queue Away',
+                      value: Math.max(0, Number(nexusSnapshot?.queueMatchesAway ?? 0)),
+                    },
+                    {
+                      label: 'Announcements',
+                      value: Number(nexusSnapshot?.announcements?.length ?? 0),
+                    },
+                    {
+                      label: 'Parts',
+                      value: Number(nexusSnapshot?.partsRequests?.length ?? 0),
+                    },
+                    {
+                      label: 'Pending Insp',
+                      value: Number(nexusSnapshot?.inspectionSummary?.pending ?? 0),
+                    },
+                  ]}
+                  chartFamily="bar"
+                  series={[{ key: 'value', label: 'Count', color: '#4bb3fd' }]}
+                  valueFormatter={(value) => fmt(value, 0)}
+                />
+              </div>
+              <div className="stack-12">
+                <div className="panel" style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Event Signals</div>
+                  <div className="stack-8" style={{ maxHeight: 300, overflow: 'auto' }}>
+                    {recentLiveSignals.map((signal) => (
+                      <div key={signal.id} className="panel-2" style={{ padding: 12 }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: 800 }}>{signal.title}</div>
+                            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                              {signal.body || signal.signalType}
+                            </div>
+                          </div>
+                          <span className="badge dashboard-inline-chip">{signal.source}</span>
+                        </div>
+                        <div className="muted mono" style={{ marginTop: 8, fontSize: 11 }}>
+                          {formatLocalizedDateTime(signal.createdAtMs, language, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {!recentLiveSignals.length ? (
+                      <div className="muted">No live signals have been received yet.</div>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="panel" style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Webcast Quick Access</div>
+                  {preferredWebcast?.url ? (
+                    <div className="stack-8">
+                      <div className="muted">
+                        Launch the preferred webcast directly from NOW when the desk needs eyes on
+                        the stream.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <a
+                          className="button button-primary"
+                          href={preferredWebcast.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open Webcast
+                        </a>
+                        <span className="badge dashboard-inline-chip">{preferredWebcast.type}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="muted">No webcast surfaced for this event yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
           </DisclosureSection>
         ) : null}
       </div>
@@ -4202,6 +4575,85 @@ export default function HomePage() {
       teleop: row.teleopEpa,
       endgame: row.endgameEpa,
     }));
+    const validationChartRows = [
+      { label: 'Aligned', value: validationCounts.match },
+      { label: 'Mismatch', value: validationCounts.mismatch },
+      { label: 'Missing', value: validationCounts.missing },
+      {
+        label: 'Signals',
+        value: liveSignals.length,
+      },
+      {
+        label: 'Stale Sec',
+        value: Number(sourceValidation?.staleSeconds ?? 0),
+      },
+    ];
+    const opsChartRows = [
+      {
+        label: 'Queue Away',
+        value: Math.max(0, Number(nexusSnapshot?.queueMatchesAway ?? 0)),
+      },
+      {
+        label: 'Announce',
+        value: Number(nexusSnapshot?.announcements?.length ?? 0),
+      },
+      {
+        label: 'Parts',
+        value: Number(nexusSnapshot?.partsRequests?.length ?? 0),
+      },
+      {
+        label: 'Inspect Pending',
+        value: Number(nexusSnapshot?.inspectionSummary?.pending ?? 0),
+      },
+      {
+        label: 'Signals',
+        value: liveSignals.length,
+      },
+    ];
+    const officialRankingsCount = Array.isArray(officialSnapshot?.rankings?.Rankings)
+      ? officialSnapshot.rankings.Rankings.length
+      : Array.isArray(officialSnapshot?.rankings?.rankings)
+        ? officialSnapshot.rankings.rankings.length
+        : 0;
+    const mediaEntries = Array.isArray(mediaSnapshot?.media)
+      ? mediaSnapshot.media.slice(0, 12)
+      : [];
+    const externalToolLinks = [
+      {
+        label: 'TBA Event',
+        href: loadedEventKey ? `https://www.thebluealliance.com/event/${loadedEventKey}` : null,
+        detail: 'Working live event page',
+      },
+      {
+        label: 'Statbotics Event',
+        href: loadedEventKey ? `https://www.statbotics.io/event/${loadedEventKey}` : null,
+        detail: 'EPA and predictive context',
+      },
+      {
+        label: 'Chief Delphi Search',
+        href: loadedEventKey
+          ? `https://www.chiefdelphi.com/search?q=${encodeURIComponent(loadedEventKey)}`
+          : null,
+        detail: 'Research and event intel',
+      },
+      {
+        label: 'AdvantageScope Docs',
+        href: 'https://docs.advantagescope.org/',
+        detail: 'Robot diagnostics and replay tooling',
+      },
+      {
+        label: 'FIRST Manual + Q&A',
+        href: 'https://www.firstinspires.org/resource-library/frc/competition-manual-qa-system',
+        detail: 'Official rules, updates, and Q&A',
+      },
+      {
+        label: settings.scoutingUrl ? 'Scouting Workspace' : 'Scoutradioz',
+        href: settings.scoutingUrl || 'https://scoutradioz.com/',
+        detail: settings.scoutingUrl
+          ? 'Team-configured scouting link'
+          : 'External scouting platform',
+      },
+    ].filter((item) => item.href);
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
         <div className="panel" style={{ padding: 16 }}>
@@ -4273,11 +4725,34 @@ export default function HomePage() {
             >
               Sort by Composite
             </button>
+            <button className="button button-subtle" onClick={() => window.print()}>
+              Print Event Summary
+            </button>
           </div>
           <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
             {afterQualNumber > 0
               ? `Showing event stats recomputed from completed quals at or after Q${afterQualNumber}. EPA stays as the live anchor; RP / OPR / DPR / CCWM / SOS / ranks are recomputed from that slice.`
               : 'Showing full-event stats.'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            <span
+              className={`badge ${sourceValidation ? sourceStatusBadgeClass(sourceValidation.firstStatus) : ''}`}
+            >
+              FIRST{' '}
+              {sourceValidation ? sourceStatusLabel(sourceValidation.firstStatus) : 'Disabled'}
+            </span>
+            <span
+              className={`badge ${nexusSnapshot ? sourceStatusBadgeClass(nexusSnapshot.status) : ''}`}
+            >
+              Nexus {nexusSnapshot ? sourceStatusLabel(nexusSnapshot.status) : 'Disabled'}
+            </span>
+            <span className="badge">Signals {liveSignals.length}</span>
+            <span className="badge">
+              Discrepancies {validationCounts.mismatch} / Missing {validationCounts.missing}
+            </span>
+            {nexusSnapshot?.queueText ? (
+              <span className="badge">{nexusSnapshot.queueText}</span>
+            ) : null}
           </div>
         </div>
         <div className="grid-2">
@@ -4534,6 +5009,326 @@ export default function HomePage() {
               ]}
               valueFormatter={(value) => fmt(value, 1)}
             />
+          </div>
+        </DisclosureSection>
+        <DisclosureSection
+          storageKey="ui.current.event.ops"
+          title="Ops + Live Signals"
+          description="Event-conditional Nexus operations, queue drift, and recent live event signals."
+          defaultOpen
+        >
+          <div className="grid-2">
+            <AnalyticsChartBlock
+              title="Ops Pressure Board"
+              description="Queue, announcements, parts, inspection pressure, and signal volume."
+              data={opsChartRows}
+              chartFamily="bar"
+              series={[{ key: 'value', label: 'Count', color: '#2dd4bf' }]}
+              valueFormatter={(value) => fmt(value, 0)}
+            />
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>Nexus Event Ops</div>
+              <div className="stack-8">
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                    Queue
+                  </div>
+                  <div style={{ fontWeight: 900 }}>
+                    {nexusSnapshot?.queueText ?? 'Nexus not configured for this event'}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Current {nexusSnapshot?.currentMatchKey ?? '-'} | Next{' '}
+                    {nexusSnapshot?.nextMatchKey ?? '-'}
+                  </div>
+                </div>
+                <div className="grid-2">
+                  <div className="panel-2" style={{ padding: 12 }}>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                      Announcements
+                    </div>
+                    <div style={{ fontWeight: 900 }}>
+                      {nexusSnapshot?.announcements?.length ?? 0}
+                    </div>
+                  </div>
+                  <div className="panel-2" style={{ padding: 12 }}>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                      Parts Requests
+                    </div>
+                    <div style={{ fontWeight: 900 }}>
+                      {nexusSnapshot?.partsRequests?.length ?? 0}
+                    </div>
+                  </div>
+                </div>
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Recent Signals</div>
+                  <div className="stack-8" style={{ maxHeight: 280, overflow: 'auto' }}>
+                    {recentLiveSignals.map((signal) => (
+                      <div key={signal.id} className="panel-2" style={{ padding: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ fontWeight: 700 }}>{signal.title}</div>
+                          <span className="badge dashboard-inline-chip">{signal.source}</span>
+                        </div>
+                        <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                          {signal.body || signal.signalType}
+                        </div>
+                        <div className="mono muted" style={{ marginTop: 6, fontSize: 11 }}>
+                          {formatLocalizedDateTime(signal.createdAtMs, language, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {!recentLiveSignals.length ? (
+                      <div className="muted">No live signals captured for this event yet.</div>
+                    ) : null}
+                  </div>
+                </div>
+                {nexusSnapshot?.pitMapUrl ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <a
+                      className="button"
+                      href={nexusSnapshot.pitMapUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Pit Map
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </DisclosureSection>
+        <DisclosureSection
+          storageKey="ui.current.event.validation"
+          title="Official Validation"
+          description="FIRST official overlap checks, source freshness, and visible discrepancy review."
+          badge={
+            <span className="badge">
+              {sourceValidation?.summary ?? 'No official validation yet'}
+            </span>
+          }
+          defaultOpen
+        >
+          <div className="grid-2">
+            <AnalyticsChartBlock
+              title="Validation Coverage"
+              description="At-a-glance count of aligned, mismatched, and missing source checks."
+              data={validationChartRows}
+              chartFamily="bar"
+              series={[{ key: 'value', label: 'Count', color: '#38bdf8' }]}
+              valueFormatter={(value) => fmt(value, 0)}
+            />
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>Source Comparison</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                <span
+                  className={`badge ${sourceValidation ? sourceStatusBadgeClass(sourceValidation.firstStatus) : ''}`}
+                >
+                  FIRST{' '}
+                  {sourceValidation ? sourceStatusLabel(sourceValidation.firstStatus) : 'Disabled'}
+                </span>
+                <span
+                  className={`badge ${nexusSnapshot ? sourceStatusBadgeClass(nexusSnapshot.status) : ''}`}
+                >
+                  Nexus {nexusSnapshot ? sourceStatusLabel(nexusSnapshot.status) : 'Disabled'}
+                </span>
+                <span className="badge">Official rankings {officialRankingsCount}</span>
+                <span className="badge">
+                  Stale{' '}
+                  {sourceValidation?.staleSeconds != null
+                    ? `${sourceValidation.staleSeconds}s`
+                    : '-'}
+                </span>
+              </div>
+              <div style={{ overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left' }}>
+                      <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Check</th>
+                      <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Status</th>
+                      <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Working</th>
+                      <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Official</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(sourceValidation?.discrepancies ?? []).map((item) => (
+                      <tr key={item.key}>
+                        <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                          <div style={{ fontWeight: 700 }}>{item.label}</div>
+                          {item.detail ? (
+                            <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
+                              {item.detail}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                          <span
+                            className={`badge ${
+                              item.status === 'mismatch'
+                                ? 'badge-red'
+                                : item.status === 'match'
+                                  ? 'badge-green'
+                                  : ''
+                            }`}
+                          >
+                            {item.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                          {item.workingValue ?? '-'}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                          {item.officialValue ?? '-'}
+                        </td>
+                      </tr>
+                    ))}
+                    {!sourceValidation?.discrepancies?.length ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="muted"
+                          style={{ padding: 8, borderBottom: '1px solid #1a2333' }}
+                        >
+                          No official comparison rows available yet.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </DisclosureSection>
+        <DisclosureSection
+          storageKey="ui.current.event.media"
+          title="Webcast + Media"
+          description="Preferred webcast embed plus surfaced event media from TBA."
+          defaultOpen
+        >
+          <div className="grid-2">
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>Preferred Webcast</div>
+              {preferredWebcast?.embedUrl ? (
+                <div className="stack-8">
+                  <div
+                    style={{
+                      borderRadius: 14,
+                      overflow: 'hidden',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <iframe
+                      src={preferredWebcast.embedUrl}
+                      title="Preferred event webcast"
+                      style={{ width: '100%', aspectRatio: '16 / 9', border: 0, display: 'block' }}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <a
+                      className="button button-primary"
+                      href={preferredWebcast.url ?? preferredWebcast.embedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Webcast
+                    </a>
+                    <span className="badge">{preferredWebcast.type}</span>
+                  </div>
+                </div>
+              ) : preferredWebcast?.url ? (
+                <div className="stack-8">
+                  <div className="muted">
+                    A webcast is available for this event but does not expose an embed-safe URL.
+                  </div>
+                  <a
+                    className="button button-primary"
+                    href={preferredWebcast.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open Webcast
+                  </a>
+                </div>
+              ) : (
+                <div className="muted">No webcast surfaced for the loaded event.</div>
+              )}
+            </div>
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>Media Feed</div>
+              <div className="stack-8" style={{ maxHeight: 420, overflow: 'auto' }}>
+                {mediaEntries.map((item, index) => {
+                  const label =
+                    String(item?.type ?? item?.media_type ?? 'Media') +
+                    (item?.foreign_key ? ` • ${String(item.foreign_key)}` : '');
+                  const href =
+                    (typeof item?.direct_url === 'string' && item.direct_url) ||
+                    (typeof item?.view_url === 'string' && item.view_url) ||
+                    (typeof item?.details === 'string' && /^https?:\/\//i.test(item.details)
+                      ? item.details
+                      : null);
+                  return (
+                    <div key={`${label}_${index}`} className="panel-2" style={{ padding: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <div style={{ fontWeight: 700 }}>{label}</div>
+                        {item?.preferred ? <span className="badge">Preferred</span> : null}
+                      </div>
+                      {item?.details ? (
+                        <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                          {String(item.details)}
+                        </div>
+                      ) : null}
+                      {href ? (
+                        <div style={{ marginTop: 8 }}>
+                          <a className="button" href={href} target="_blank" rel="noreferrer">
+                            Open Media
+                          </a>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {!mediaEntries.length ? (
+                  <div className="muted">No additional event media surfaced by TBA yet.</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </DisclosureSection>
+        <DisclosureSection
+          storageKey="ui.current.event.external_tools"
+          title="External Tools"
+          description="Curated companion tools and official references that help the desk without replacing native analytics."
+        >
+          <div className="panel" style={{ padding: 16 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 12,
+              }}
+            >
+              {externalToolLinks.map((item) => (
+                <a
+                  key={item.label}
+                  className="panel-2"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ padding: 14, textDecoration: 'none', color: 'inherit' }}
+                >
+                  <div style={{ fontWeight: 800 }}>{item.label}</div>
+                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                    {item.detail}
+                  </div>
+                </a>
+              ))}
+            </div>
           </div>
         </DisclosureSection>
       </div>
@@ -7361,6 +8156,89 @@ export default function HomePage() {
             </div>
           </div>
         </div>
+        <div className="grid-2">
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Live Integrations</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <span
+                className={`badge ${sourceValidation ? sourceStatusBadgeClass(sourceValidation.firstStatus) : ''}`}
+              >
+                FIRST{' '}
+                {sourceValidation ? sourceStatusLabel(sourceValidation.firstStatus) : 'Disabled'}
+              </span>
+              <span
+                className={`badge ${nexusSnapshot ? sourceStatusBadgeClass(nexusSnapshot.status) : ''}`}
+              >
+                Nexus {nexusSnapshot ? sourceStatusLabel(nexusSnapshot.status) : 'Disabled'}
+              </span>
+              <span className="badge">
+                Realtime {isSupabaseConfigured() ? 'Enabled' : 'Disabled'}
+              </span>
+              <span className="badge">Signals {liveSignals.length}</span>
+            </div>
+            <div className="stack-8">
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Current Event Workspace
+                </div>
+                <div className="mono">{activeWorkspaceKey || '-'}</div>
+              </div>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Validation Summary
+                </div>
+                <div style={{ fontWeight: 800 }}>
+                  {sourceValidation?.summary ?? 'No validation snapshot yet'}
+                </div>
+              </div>
+              <div className="grid-2">
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                    Official Mismatches
+                  </div>
+                  <div style={{ fontWeight: 900 }}>{validationCounts.mismatch}</div>
+                </div>
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                    Missing Checks
+                  </div>
+                  <div style={{ fontWeight: 900 }}>{validationCounts.missing}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Webhook + Collaboration</div>
+            <div className="stack-8">
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  TBA Webhook Receiver
+                </div>
+                <div className="mono">/api/webhook/tba</div>
+              </div>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Event Media
+                </div>
+                <div style={{ fontWeight: 800 }}>
+                  {preferredWebcast?.url ? 'Preferred webcast available' : 'No webcast surfaced'}
+                </div>
+              </div>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Nexus Queue
+                </div>
+                <div style={{ fontWeight: 800 }}>
+                  {nexusSnapshot?.queueText ?? 'No queue signal'}
+                </div>
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Shared desk saves are event-scoped in Supabase. Realtime updates are designed for
+                last-write-wins collaboration without bringing local-only persistence back.
+              </div>
+            </div>
+          </div>
+        </div>
         <DisclosureSection
           storageKey="ui.settings.diagnostics"
           title="Diagnostics Coverage"
@@ -7422,7 +8300,8 @@ export default function HomePage() {
       return renderTeamProfileTab('current');
     if (majorTab === 'CURRENT' && currentSubTab === 'RANKINGS') return renderRankingsTab();
     if (majorTab === 'CURRENT' && currentSubTab === 'PLAYOFFS') return renderPlayoffsTab();
-    if (majorTab === 'CURRENT' && currentSubTab === 'EVENT') return renderEventTab();
+    if (majorTab === 'CURRENT' && currentSubTab === 'EVENT')
+      return <div className="event-print-root">{renderEventTab()}</div>;
     if (majorTab === 'CURRENT' && currentSubTab === 'DATA') return renderDataTab('current');
 
     if (majorTab === 'HISTORICAL' && historicalSubTab === 'PRE_EVENT')
@@ -7470,6 +8349,24 @@ export default function HomePage() {
         value: Math.round(settings.pollMs / 1000),
       })}
     </span>,
+    sourceValidation ? (
+      <span
+        key="official"
+        className={`badge ${sourceStatusBadgeClass(sourceValidation.firstStatus)}`}
+      >
+        FIRST {sourceStatusLabel(sourceValidation.firstStatus)}
+      </span>
+    ) : null,
+    nexusSnapshot ? (
+      <span key="nexus" className={`badge ${sourceStatusBadgeClass(nexusSnapshot.status)}`}>
+        Nexus {sourceStatusLabel(nexusSnapshot.status)}
+      </span>
+    ) : null,
+    liveSignals.length ? (
+      <span key="signals" className="badge">
+        {t('field.signals', 'Signals')} {liveSignals.length}
+      </span>
+    ) : null,
   ];
   return (
     <DashboardPreferencesProvider language={language}>
