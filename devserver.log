@@ -1,0 +1,19 @@
+
+> tbsb-dashboard@0.1.0 dev
+> next dev
+
+⚠ Port 3000 is in use by process 10056, using available port 3001 instead.
+▲ Next.js 16.2.1 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.86.40:3001
+- Environments: .env.local
+✓ Ready in 515ms
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3000
+- PID:          10056
+- Dir:          C:\Users\ethan\Desktop\tbsb-dashboard
+- Log:          .next\dev\logs\next-development.log
+
+Run taskkill /PID 10056 /F to stop it.
+[?25h
