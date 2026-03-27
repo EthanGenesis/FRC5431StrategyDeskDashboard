@@ -4,9 +4,9 @@ This is the zero-to-live runbook for publishing TBSB Dashboard with:
 
 - `GitHub` as source control
 - `Vercel` for hosting
-- `Supabase` for authentication and persistence
+- `Supabase` for shared persistence and server-side cache storage
 
-This repo is currently a `Next.js 16` app that already depends on `TBA_AUTH_KEY` and still stores most saved data in browser storage / IndexedDB. The files added for the production migration baseline are:
+This repo is currently a `Next.js 16` app that already depends on `TBA_AUTH_KEY`. Shared desk data now persists in Supabase, with event-scoped workspaces for shared collaboration and session-only personal preferences for theme/language/webhooks/loading context. The files added for the production migration baseline are:
 
 - [.env.example](/c:/Users/ethan/Desktop/tbsb-dashboard/.env.example)
 - [lib/env.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/env.ts)
@@ -29,18 +29,26 @@ Chosen production model for this repo:
 
 - public GitHub repo
 - direct deploys from `main`
-- public read-only app for visitors
-- one shared workspace named `shared`
-- one admin email/password login
+- shared-link app for trusted users
+- shared read/write workspace access for anyone who has the app link
+- shared desk data is scoped by loaded event using workspace keys like `event:2026txabc`
+- theme, language, loaded team, loaded event, and webhook settings are not shared globally
 - Supabase stores:
-  - shared settings
   - compare drafts/sets
   - predict scenarios
   - alliance scenarios
   - pick lists
   - playoff results
   - strategy records
+  - event-scoped shared workspace settings
   - snapshot and upstream cache data
+
+Important security note:
+
+- this is a collaboration-by-shared-link model, not a hardened permission model
+- anyone who has the deployed app URL and the shipped browser app can use the public Supabase client to read and write the event workspaces allowed by RLS
+- this is acceptable only if you intentionally treat the app URL as a trusted private team link
+- if you later need per-user accountability or stronger write protection, you should move back to authenticated users and narrower write policies
 
 ## 1. Local Prerequisites
 
@@ -130,21 +138,16 @@ In Supabase:
 3. Save the database password somewhere secure.
 4. Open `Project Settings -> API` and collect:
    - `Project URL`
-   - `anon public` key
+   - `Publishable key`
    - `service_role` key
 
 ### Auth setup
 
-In `Authentication -> Providers`:
+Supabase Auth is optional for the first cut of this shared-link model.
 
-- enable `Email`
-- use email/password auth
-- for a single-admin setup, disable open public signups after creating the admin account if you do not want unsolicited accounts
-
-Create the admin user:
-
-1. Open `Authentication -> Users`
-2. Create the admin email/password user
+- you can leave email/password auth disabled if you are not using signed-in identities yet
+- the app uses the Supabase public client key for event-scoped shared reads and writes
+- the `service_role` key remains server-only and is still used for trusted server-side cache persistence when needed
 
 ### Apply the shared workspace schema
 
@@ -152,9 +155,10 @@ Open the SQL editor in Supabase and run:
 
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
 
+If you already ran an older version of this SQL file, run the updated file again so the RLS policies allow the new `event:*` workspace keys.
+
 This creates:
 
-- `tbsb_admin_users`
 - `tbsb_workspace_settings`
 - `tbsb_compare_drafts`
 - `tbsb_compare_sets`
@@ -166,21 +170,6 @@ This creates:
 - `tbsb_snapshot_cache`
 - `tbsb_upstream_cache`
 
-### Grant admin rights to your auth user
-
-After the admin auth user exists, run this in Supabase SQL:
-
-```sql
-insert into public.tbsb_admin_users (user_id, email)
-select id, email
-from auth.users
-where email = 'your-admin-email@example.com'
-on conflict (user_id) do update
-set email = excluded.email;
-```
-
-This is what allows the admin account to pass the `tbsb_is_admin()` RLS check.
-
 ## 4. Fill Local Supabase Env Vars
 
 Update `.env.local` with:
@@ -189,7 +178,7 @@ Update `.env.local` with:
 TBA_AUTH_KEY=...
 
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 
 APP_LOG_LEVEL=info
@@ -204,6 +193,8 @@ Rules:
 - `NEXT_PUBLIC_*` values are safe for the browser
 - `SUPABASE_SERVICE_ROLE_KEY` is server-only
 - never expose the service role key in client code
+- in this model, the publishable key is intentionally enough to read and write the event-scoped shared workspace tables allowed by RLS
+- server-side cache writes use the service-role client, which bypasses RLS; you do not need separate RLS write policies for that server-only path
 
 ## 5. Vercel Project Setup
 
@@ -218,7 +209,7 @@ Add environment variables in Vercel for `Production`, and preferably also `Previ
 
 - `TBA_AUTH_KEY`
 - `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - optional:
   - `APP_LOG_LEVEL`
@@ -251,9 +242,8 @@ After the first Vercel deploy:
 Supabase-specific checks:
 
 - public visitors can read shared data
-- public visitors cannot write data
-- the admin account can sign in
-- the admin account can write data
+- public visitors can write shared workspace data
+- snapshot and upstream cache rows are still written only from trusted server-side code
 - shared workspace rows exist in Supabase
 - snapshot / cache rows can be written server-side
 
@@ -282,6 +272,11 @@ Current local sources include:
 
 These are the first surfaces that should move to Supabase-backed storage while keeping the live dashboard behavior intact.
 
+Your current product decision is:
+
+- Supabase is the primary storage layer for the whole project base
+- browser storage may still exist as a temporary offline/fallback cache during migration, but saved project artifacts should be treated as Supabase-owned
+
 ## 8. Repo-Side Implementation Baseline Already Added
 
 The repo is now prepared for the production migration with:
@@ -304,11 +299,11 @@ What is still manual:
 
 After infrastructure is created, the next code phase should be:
 
-1. add admin sign-in UI
-2. add shared workspace read/write service layer
-3. migrate settings + compare storage first
-4. migrate predict/alliance/playoff artifacts
-5. migrate strategy records
-6. move snapshot/upstream caching to trusted server-side Supabase writes
+1. add shared workspace read/write service layer
+2. migrate settings + compare storage first
+3. migrate predict/alliance/playoff artifacts
+4. migrate strategy records
+5. move snapshot/upstream caching to trusted server-side Supabase writes
+6. leave browser storage only as a migration fallback until every saved artifact is Supabase-backed
 
 That ordering gives you the lowest-risk path from local-only persistence to shared production persistence.

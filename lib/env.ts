@@ -32,9 +32,12 @@ const supabasePublicEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z
     .string()
     .url('Missing or invalid NEXT_PUBLIC_SUPABASE_URL in .env.local'),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z
     .string()
-    .min(1, 'Missing NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local'),
+    .min(
+      1,
+      'Missing Supabase publishable key in .env.local. Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY, or NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+    ),
 });
 
 const supabaseServiceEnvSchema = supabasePublicEnvSchema.extend({
@@ -48,6 +51,21 @@ export type SupabaseServiceEnv = z.infer<typeof supabaseServiceEnvSchema>;
 let parsedEnv: AppEnv | null = null;
 let parsedSupabasePublicEnv: SupabasePublicEnv | null = null;
 let parsedSupabaseServiceEnv: SupabaseServiceEnv | null = null;
+
+function getSupabasePublishableKey(): string | undefined {
+  const candidates = [
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = candidate?.trim();
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
 
 export function getAppEnv(): AppEnv {
   if (parsedEnv) {
@@ -68,10 +86,7 @@ export function getAppEnv(): AppEnv {
 }
 
 export function hasSupabasePublicEnv(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim(),
-  );
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() && getSupabasePublishableKey());
 }
 
 export function getSupabasePublicEnv(): SupabasePublicEnv {
@@ -81,7 +96,7 @@ export function getSupabasePublicEnv(): SupabasePublicEnv {
 
   parsedSupabasePublicEnv = supabasePublicEnvSchema.parse({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim(),
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim(),
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: getSupabasePublishableKey(),
   });
 
   return parsedSupabasePublicEnv;
@@ -90,7 +105,7 @@ export function getSupabasePublicEnv(): SupabasePublicEnv {
 export function hasSupabaseServiceEnv(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() &&
+    getSupabasePublishableKey() &&
     process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(),
   );
 }
@@ -102,7 +117,7 @@ export function getSupabaseServiceEnv(): SupabaseServiceEnv {
 
   parsedSupabaseServiceEnv = supabaseServiceEnvSchema.parse({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim(),
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim(),
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: getSupabasePublishableKey(),
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(),
   });
 

@@ -557,11 +557,30 @@ test.beforeEach(async ({ page }) => {
   await mockDashboardApis(page);
 });
 
-test('match to strategy workflow is preserved', async ({ page }) => {
+async function loadMockedDeskState(page: Page) {
   await page.goto('/');
+
+  await page.getByRole('spinbutton', { name: 'Team' }).fill('5431');
+  await page.getByRole('textbox', { name: 'Event' }).fill(EVENT_KEY);
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/snapshot?') && response.request().method() === 'GET',
+    ),
+    page.getByRole('button', { name: 'Load' }).click(),
+  ]);
+
+  const statusStrip = page.locator('.dashboard-status-strip');
+  await expect(statusStrip.getByText(`Event ${EVENT_KEY}`)).toBeVisible();
+  await expect(statusStrip.getByText('Team 5431')).toBeVisible();
+}
+
+test('match to strategy workflow is preserved', async ({ page }) => {
+  await loadMockedDeskState(page);
 
   await page.getByRole('button', { name: 'SCHEDULE', exact: true }).click();
   await page.getByRole('button', { name: 'All Event Matches' }).click();
+  await expect(page.getByText('QM1', { exact: true }).first()).toBeVisible();
   await page.getByText('QM1', { exact: true }).first().click();
   await expect(page.getByRole('button', { name: 'Open in STRATEGY' })).toBeVisible();
 
@@ -570,7 +589,7 @@ test('match to strategy workflow is preserved', async ({ page }) => {
 });
 
 test('team profile and compare workflows are preserved', async ({ page }) => {
-  await page.goto('/');
+  await loadMockedDeskState(page);
 
   await page.getByRole('button', { name: 'TEAM PROFILE' }).click();
   await expect(page.getByText('Loaded Event: Test Regional')).toBeVisible();
@@ -594,7 +613,7 @@ test('settings raw payload explorer is preserved', async ({ page }) => {
 });
 
 test('district tabs show FIT-only unavailable state for non-FIT events', async ({ page }) => {
-  await page.goto('/');
+  await loadMockedDeskState(page);
 
   await page.getByRole('button', { name: 'DISTRICT', exact: true }).click();
   await expect(page.getByText('FIT District Only')).toBeVisible();

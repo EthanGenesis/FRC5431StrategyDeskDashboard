@@ -80,7 +80,14 @@ The production migration baseline now adds:
 - [lib/persistence-surfaces.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/persistence-surfaces.ts)
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
 
-This allows the app to move from browser-only persistence toward one shared Supabase-backed workspace without changing the public route structure.
+This allows the app to move from browser-only persistence toward event-scoped shared Supabase workspaces without changing the public route structure.
+
+Current deployment intent:
+
+- the deployed app is a trusted shared-link workspace
+- anyone with the link can use the current event workspace and save project artifacts
+- Supabase is the primary storage layer for saved project data
+- theme, language, loaded team, loaded event, and webhook settings are intentionally session-only instead of globally shared
 
 ### Scoped state
 

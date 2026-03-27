@@ -1,7 +1,6 @@
 export const SHARED_WORKSPACE_KEY = 'shared' as const;
 
 export const PERSISTENCE_TABLES = {
-  adminUsers: 'tbsb_admin_users',
   workspaceSettings: 'tbsb_workspace_settings',
   compareDrafts: 'tbsb_compare_drafts',
   compareSets: 'tbsb_compare_sets',

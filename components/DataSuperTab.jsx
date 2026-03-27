@@ -21,7 +21,8 @@ import {
   seasonEventMetricValue,
   seasonMatchMetricValue,
 } from '../lib/analytics-registry';
-import { loadCompareDraft } from '../lib/compare-storage';
+import { DEFAULT_COMPARE_DRAFT } from '../lib/compare-storage';
+import { getEventWorkspaceKey, loadCompareDraftForScope } from '../lib/shared-workspace-browser';
 function uniqNumbers(values) {
   return Array.from(
     new Set(
@@ -92,10 +93,33 @@ export default function DataSuperTab({
     scope === 'current' ? 'event_epa' : 'season_match_epa',
   );
   const [chartFamily, setChartFamily] = useState('bar');
-  const [compareDraft, setCompareDraft] = useState(() => loadCompareDraft(scope));
+  const [compareDraft, setCompareDraft] = useState(DEFAULT_COMPARE_DRAFT);
+  const workspaceKey = useMemo(() => getEventWorkspaceKey(loadedEventKey), [loadedEventKey]);
   useEffect(() => {
-    setCompareDraft(loadCompareDraft(scope));
-  }, [scope, compareSyncKey]);
+    let cancelled = false;
+
+    if (!workspaceKey) {
+      setCompareDraft(DEFAULT_COMPARE_DRAFT);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadSharedCompareDraft() {
+      try {
+        const draft = await loadCompareDraftForScope(scope, workspaceKey);
+        if (!cancelled) setCompareDraft(draft);
+      } catch {
+        if (!cancelled) setCompareDraft(DEFAULT_COMPARE_DRAFT);
+      }
+    }
+
+    loadSharedCompareDraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [compareSyncKey, scope, workspaceKey]);
   const compareTeams = useMemo(
     () => uniqNumbers([...(compareDraft?.teamNumbers ?? []), loadedTeam].filter(Boolean)),
     [compareDraft, loadedTeam],

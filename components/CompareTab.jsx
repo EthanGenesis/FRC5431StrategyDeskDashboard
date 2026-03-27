@@ -15,13 +15,14 @@ import {
   formatAnalyticsMetricValue,
   getAnalyticsMetric,
 } from '../lib/analytics-registry';
+import { DEFAULT_COMPARE_DRAFT } from '../lib/compare-storage';
 import {
-  DEFAULT_COMPARE_DRAFT,
-  loadCompareDraft,
-  loadCompareSets,
-  saveCompareDraft,
-  saveCompareSets,
-} from '../lib/compare-storage';
+  getEventWorkspaceKey,
+  loadCompareDraftForScope,
+  loadCompareSetsShared,
+  saveCompareDraftForScope,
+  saveCompareSetsShared,
+} from '../lib/shared-workspace-browser';
 function uniqNumbers(values) {
   return Array.from(
     new Set(
@@ -89,6 +90,9 @@ export default function CompareTab({
   const [snapshot, setSnapshot] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageWorkspaceKey, setStorageWorkspaceKey] = useState(null);
+  const workspaceKey = useMemo(() => getEventWorkspaceKey(loadedEventKey), [loadedEventKey]);
   const selectedTeamNumbers = useMemo(() => draft.teamNumbers ?? [], [draft.teamNumbers]);
   const normalizeDraftForScope = useCallback(
     (baseDraft) => {
@@ -130,31 +134,81 @@ export default function CompareTab({
     [normalizeDraftForScope],
   );
   useEffect(() => {
-    const storedDraft = normalizeDraftForScope(loadCompareDraft(scope));
-    const storedSets = loadCompareSets();
-    if (!initializedRef.current) {
-      initializedRef.current = true;
+    let cancelled = false;
+
+    if (!workspaceKey) {
       setDraft(
-        !storedDraft.teamNumbers.length && loadedTeam != null
+        loadedTeam != null
           ? normalizeDraftForScope({
-              ...storedDraft,
+              ...DEFAULT_COMPARE_DRAFT,
               teamNumbers: [Math.floor(Number(loadedTeam))],
               baselineTeamNumber: Math.floor(Number(loadedTeam)),
             })
-          : storedDraft,
+          : DEFAULT_COMPARE_DRAFT,
       );
-      setSavedSets(storedSets);
-      return;
+      setSavedSets([]);
+      setStorageReady(false);
+      setStorageWorkspaceKey(null);
+      return () => {
+        cancelled = true;
+      };
     }
-    setDraft(normalizeDraftForScope(loadCompareDraft(scope)));
-    setSavedSets(loadCompareSets());
-  }, [externalUpdateKey, loadedTeam, normalizeDraftForScope, scope]);
+
+    async function hydrateCompareState() {
+      let loadedSuccessfully = false;
+      setStorageReady(false);
+      setStorageWorkspaceKey(null);
+      try {
+        const [storedDraftRaw, storedSets] = await Promise.all([
+          loadCompareDraftForScope(scope, workspaceKey),
+          loadCompareSetsShared(workspaceKey),
+        ]);
+        if (cancelled) return;
+        const storedDraft = normalizeDraftForScope(storedDraftRaw);
+        if (!initializedRef.current) {
+          initializedRef.current = true;
+          setDraft(
+            !storedDraft.teamNumbers.length && loadedTeam != null
+              ? normalizeDraftForScope({
+                  ...storedDraft,
+                  teamNumbers: [Math.floor(Number(loadedTeam))],
+                  baselineTeamNumber: Math.floor(Number(loadedTeam)),
+                })
+              : storedDraft,
+          );
+        } else {
+          setDraft(storedDraft);
+        }
+        setSavedSets(storedSets);
+        setStorageWorkspaceKey(workspaceKey);
+        loadedSuccessfully = true;
+      } catch (error) {
+        if (!cancelled) {
+          setErrorText(error?.message ?? 'Failed to load shared compare state.');
+        }
+      } finally {
+        if (!cancelled) setStorageReady(loadedSuccessfully);
+      }
+    }
+
+    hydrateCompareState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [externalUpdateKey, loadedTeam, normalizeDraftForScope, scope, workspaceKey]);
   useEffect(() => {
-    saveCompareDraft(draft, scope);
-  }, [draft, scope]);
+    if (!storageReady || !workspaceKey || storageWorkspaceKey !== workspaceKey) return;
+    void saveCompareDraftForScope(draft, scope, workspaceKey).catch((error) => {
+      setErrorText(error?.message ?? 'Failed to save shared compare draft.');
+    });
+  }, [draft, scope, storageReady, storageWorkspaceKey, workspaceKey]);
   useEffect(() => {
-    saveCompareSets(savedSets);
-  }, [savedSets]);
+    if (!storageReady || !workspaceKey || storageWorkspaceKey !== workspaceKey) return;
+    void saveCompareSetsShared(workspaceKey, savedSets).catch((error) => {
+      setErrorText(error?.message ?? 'Failed to save shared compare sets.');
+    });
+  }, [savedSets, storageReady, storageWorkspaceKey, workspaceKey]);
   useEffect(() => {
     if (!selectedTeamNumbers.length) return;
     const normalizedLoadedTeam =

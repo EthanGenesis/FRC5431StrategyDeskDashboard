@@ -2,14 +2,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJsonOrThrow } from '../lib/httpCache';
 import { formatMatchLabel, safeNumber, sortMatches, teamNumberFromKey } from '../lib/logic';
-import StrategyBoard from './StrategyBoard';
+import { makeStrategyRecordId } from '../lib/strategy-storage';
 import {
-  getStrategyRecord,
-  getStrategyRecordById,
-  listStrategyRecords,
-  makeStrategyRecordId,
-  saveStrategyRecord,
-} from '../lib/strategy-storage';
+  getEventWorkspaceKey,
+  getStrategyRecordByIdShared,
+  getStrategyRecordShared,
+  listStrategyRecordsShared,
+  saveStrategyRecordShared,
+} from '../lib/shared-workspace-browser';
+import StrategyBoard from './StrategyBoard';
 import DisclosureSection from './ui/DisclosureSection';
 const RED_MARKER_Y = [120, 250, 380];
 const BLUE_MARKER_Y = [120, 250, 380];
@@ -174,21 +175,30 @@ export default function StrategyWorkspace({
   const lastSavedJsonRef = useRef('');
   const targetEventKey = target?.eventKey ?? null;
   const targetMatchKey = target?.matchKey ?? null;
+  const strategyWorkspaceKey = useMemo(
+    () => getEventWorkspaceKey(targetEventKey ?? currentEventKey),
+    [currentEventKey, targetEventKey],
+  );
   const currentContext = useMemo(
     () => buildCurrentContext(currentSnapshot ?? null, currentEventKey),
     [currentSnapshot, currentEventKey],
   );
   useEffect(() => {
+    if (!strategyWorkspaceKey) {
+      setSavedStrategies([]);
+      return;
+    }
+
     async function refreshSavedStrategies() {
       try {
-        const rows = await listStrategyRecords();
+        const rows = await listStrategyRecordsShared(strategyWorkspaceKey);
         setSavedStrategies(rows);
       } catch {
         setSavedStrategies([]);
       }
     }
     refreshSavedStrategies();
-  }, []);
+  }, [strategyWorkspaceKey]);
   useEffect(() => {
     if (!targetEventKey) {
       setEventContext(null);
@@ -386,7 +396,7 @@ export default function StrategyWorkspace({
     const sequence = ++loadSequenceRef.current;
     async function loadStoredRecord() {
       try {
-        const stored = await getStrategyRecord(targetEventKey, selectedMatch.key);
+        const stored = await getStrategyRecordShared(targetEventKey, selectedMatch.key);
         if (sequence !== loadSequenceRef.current) return;
         setLoadedRecord(stored ?? blankRecord, true);
         setAutosaveStatus(stored ? 'Saved strategy loaded' : 'Blank strategy ready');
@@ -416,12 +426,14 @@ export default function StrategyWorkspace({
     setAutosaveStatus('Saving draft...');
     autosaveTimerRef.current = window.setTimeout(async () => {
       try {
-        await saveStrategyRecord(currentRecord);
+        await saveStrategyRecordShared(currentRecord);
         lastSavedJsonRef.current = nextJson;
         setAutosaveStatus(
           `${currentRecord.status === 'final' ? 'Final' : 'Draft'} saved ${new Date().toLocaleTimeString()}`,
         );
-        const rows = await listStrategyRecords();
+        const rows = strategyWorkspaceKey
+          ? await listStrategyRecordsShared(strategyWorkspaceKey)
+          : [];
         setSavedStrategies(rows);
       } catch (error) {
         setAutosaveStatus('Autosave failed');
@@ -431,7 +443,7 @@ export default function StrategyWorkspace({
     return () => {
       if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
     };
-  }, [recordLoaded, currentRecord]);
+  }, [currentRecord, recordLoaded, strategyWorkspaceKey]);
   function touchMeta(extra = {}) {
     setStrategyMeta((prev) =>
       prev
@@ -517,7 +529,7 @@ export default function StrategyWorkspace({
     if (!copySourceId || !selectedMatch) return;
     setActionError('');
     try {
-      const source = await getStrategyRecordById(copySourceId);
+      const source = await getStrategyRecordByIdShared(strategyWorkspaceKey, copySourceId);
       if (!source) throw new Error('Saved strategy not found.');
       if (copyScope === 'full' || copyScope === 'auto') {
         const nextAuto = coerceBoard(source.autoBoard, selectedMatch);

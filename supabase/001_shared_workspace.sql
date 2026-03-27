@@ -1,22 +1,12 @@
 create extension if not exists pgcrypto;
 
-create or replace function public.tbsb_is_admin()
+create or replace function public.tbsb_is_allowed_workspace_key(value text)
 returns boolean
 language sql
-stable
+immutable
 as $$
-  select exists (
-    select 1
-    from public.tbsb_admin_users
-    where user_id = auth.uid()
-  );
+  select value = 'shared' or value like 'event:%'
 $$;
-
-create table if not exists public.tbsb_admin_users (
-  user_id uuid primary key references auth.users (id) on delete cascade,
-  email text,
-  created_at timestamptz not null default timezone('utc', now())
-);
 
 create table if not exists public.tbsb_workspace_settings (
   workspace_key text primary key default 'shared',
@@ -142,7 +132,6 @@ create index if not exists tbsb_snapshot_cache_source_event_team_idx
 create index if not exists tbsb_upstream_cache_source_path_idx
   on public.tbsb_upstream_cache (source, request_path, updated_at desc);
 
-alter table public.tbsb_admin_users enable row level security;
 alter table public.tbsb_workspace_settings enable row level security;
 alter table public.tbsb_compare_drafts enable row level security;
 alter table public.tbsb_compare_sets enable row level security;
@@ -154,140 +143,125 @@ alter table public.tbsb_strategy_records enable row level security;
 alter table public.tbsb_snapshot_cache enable row level security;
 alter table public.tbsb_upstream_cache enable row level security;
 
-drop policy if exists "admin users can read admin table" on public.tbsb_admin_users;
-create policy "admin users can read admin table"
-  on public.tbsb_admin_users
-  for select
-  to authenticated
-  using (public.tbsb_is_admin());
-
-drop policy if exists "admin users manage admin table" on public.tbsb_admin_users;
-create policy "admin users manage admin table"
-  on public.tbsb_admin_users
-  for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
-
 drop policy if exists "public read workspace settings" on public.tbsb_workspace_settings;
 create policy "public read workspace settings"
   on public.tbsb_workspace_settings
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write workspace settings" on public.tbsb_workspace_settings;
-create policy "admin write workspace settings"
+drop policy if exists "shared workspace write workspace settings" on public.tbsb_workspace_settings;
+create policy "shared workspace write workspace settings"
   on public.tbsb_workspace_settings
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read compare drafts" on public.tbsb_compare_drafts;
 create policy "public read compare drafts"
   on public.tbsb_compare_drafts
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write compare drafts" on public.tbsb_compare_drafts;
-create policy "admin write compare drafts"
+drop policy if exists "shared workspace write compare drafts" on public.tbsb_compare_drafts;
+create policy "shared workspace write compare drafts"
   on public.tbsb_compare_drafts
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read compare sets" on public.tbsb_compare_sets;
 create policy "public read compare sets"
   on public.tbsb_compare_sets
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write compare sets" on public.tbsb_compare_sets;
-create policy "admin write compare sets"
+drop policy if exists "shared workspace write compare sets" on public.tbsb_compare_sets;
+create policy "shared workspace write compare sets"
   on public.tbsb_compare_sets
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read predict scenarios" on public.tbsb_predict_scenarios;
 create policy "public read predict scenarios"
   on public.tbsb_predict_scenarios
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write predict scenarios" on public.tbsb_predict_scenarios;
-create policy "admin write predict scenarios"
+drop policy if exists "shared workspace write predict scenarios" on public.tbsb_predict_scenarios;
+create policy "shared workspace write predict scenarios"
   on public.tbsb_predict_scenarios
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read alliance scenarios" on public.tbsb_alliance_scenarios;
 create policy "public read alliance scenarios"
   on public.tbsb_alliance_scenarios
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write alliance scenarios" on public.tbsb_alliance_scenarios;
-create policy "admin write alliance scenarios"
+drop policy if exists "shared workspace write alliance scenarios" on public.tbsb_alliance_scenarios;
+create policy "shared workspace write alliance scenarios"
   on public.tbsb_alliance_scenarios
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read pick lists" on public.tbsb_pick_lists;
 create policy "public read pick lists"
   on public.tbsb_pick_lists
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write pick lists" on public.tbsb_pick_lists;
-create policy "admin write pick lists"
+drop policy if exists "shared workspace write pick lists" on public.tbsb_pick_lists;
+create policy "shared workspace write pick lists"
   on public.tbsb_pick_lists
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read playoff results" on public.tbsb_playoff_results;
 create policy "public read playoff results"
   on public.tbsb_playoff_results
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write playoff results" on public.tbsb_playoff_results;
-create policy "admin write playoff results"
+drop policy if exists "shared workspace write playoff results" on public.tbsb_playoff_results;
+create policy "shared workspace write playoff results"
   on public.tbsb_playoff_results
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read strategy records" on public.tbsb_strategy_records;
 create policy "public read strategy records"
   on public.tbsb_strategy_records
   for select
   to anon, authenticated
-  using (workspace_key = 'shared');
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
 
-drop policy if exists "admin write strategy records" on public.tbsb_strategy_records;
-create policy "admin write strategy records"
+drop policy if exists "shared workspace write strategy records" on public.tbsb_strategy_records;
+create policy "shared workspace write strategy records"
   on public.tbsb_strategy_records
   for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
 
 drop policy if exists "public read snapshot cache" on public.tbsb_snapshot_cache;
 create policy "public read snapshot cache"
@@ -296,28 +270,12 @@ create policy "public read snapshot cache"
   to anon, authenticated
   using (true);
 
-drop policy if exists "admin write snapshot cache" on public.tbsb_snapshot_cache;
-create policy "admin write snapshot cache"
-  on public.tbsb_snapshot_cache
-  for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
-
 drop policy if exists "public read upstream cache" on public.tbsb_upstream_cache;
 create policy "public read upstream cache"
   on public.tbsb_upstream_cache
   for select
   to anon, authenticated
   using (true);
-
-drop policy if exists "admin write upstream cache" on public.tbsb_upstream_cache;
-create policy "admin write upstream cache"
-  on public.tbsb_upstream_cache
-  for all
-  to authenticated
-  using (public.tbsb_is_admin())
-  with check (public.tbsb_is_admin());
 
 insert into public.tbsb_workspace_settings (workspace_key, payload)
 values ('shared', '{}'::jsonb)

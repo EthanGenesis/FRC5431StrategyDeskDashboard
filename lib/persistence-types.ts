@@ -1,4 +1,4 @@
-export type SharedWorkspaceKey = 'shared';
+export type SharedWorkspaceKey = string;
 
 export type PersistedWorkspaceSettingsRecord = {
   workspaceKey: SharedWorkspaceKey;

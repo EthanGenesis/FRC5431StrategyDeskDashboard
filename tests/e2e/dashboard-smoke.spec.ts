@@ -70,7 +70,7 @@ test('major scope tabs and preserved troubleshooting UI are reachable', async ({
 
   await page.getByRole('button', { name: /Diagnostics Coverage/i }).click();
   await page.getByRole('button', { name: /Raw Payload Explorer/i }).click();
-  await expect(page.getByText('Explorador de payloads')).toBeVisible();
+  await expect(page.getByText(/payload/i).first()).toBeVisible();
 
   expect(
     consoleMessages

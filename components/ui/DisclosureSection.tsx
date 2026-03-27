@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 
 type DisclosureSectionProps = {
   storageKey: string;
@@ -11,42 +11,15 @@ type DisclosureSectionProps = {
   children: ReactNode;
 };
 
-function readStoredOpenState(storageKey: string, fallback: boolean): boolean {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (raw == null) return fallback;
-    return raw === 'true';
-  } catch {
-    return fallback;
-  }
-}
-
 export default function DisclosureSection({
-  storageKey,
+  storageKey: _storageKey,
   title,
   description = null,
   defaultOpen = false,
   badge = null,
   children,
 }: DisclosureSectionProps): ReactElement {
-  const initialOpen = useMemo(
-    () => readStoredOpenState(storageKey, defaultOpen),
-    [defaultOpen, storageKey],
-  );
-  const [open, setOpen] = useState(initialOpen);
-
-  useEffect(() => {
-    setOpen(readStoredOpenState(storageKey, defaultOpen));
-  }, [defaultOpen, storageKey]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(storageKey, String(open));
-    } catch {
-      // Ignore local storage failures so the section still works.
-    }
-  }, [open, storageKey]);
+  const [open, setOpen] = useState(defaultOpen);
 
   return (
     <section className={`disclosure-section ${open ? 'open' : ''}`}>

@@ -4,6 +4,6 @@ export function isSupabaseConfigured(): boolean {
   return hasSupabasePublicEnv();
 }
 
-export function isSupabaseAdminConfigured(): boolean {
+export function isSupabaseServiceConfigured(): boolean {
   return hasSupabaseServiceEnv();
 }

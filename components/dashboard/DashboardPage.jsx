@@ -1,7 +1,7 @@
 'use client';
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../lib/storage';
+import { DEFAULT_SETTINGS } from '../../lib/storage';
 import StrategyWorkspace from '../StrategyWorkspace';
 import TeamProfileTab from '../TeamProfileTab';
 import PreEventTab from '../PreEventTab';
@@ -16,8 +16,17 @@ import PageHeader from '../ui/PageHeader';
 import ProductClock from '../ui/ProductClock';
 import DisclosureSection from '../ui/DisclosureSection';
 import DashboardPreferencesProvider from '../providers/DashboardPreferencesProvider';
-import { addTeamToCompareDraft } from '../../lib/compare-storage';
+import {
+  addTeamToCompareDraftShared,
+  getEventWorkspaceKey,
+  loadNamedArtifactsShared,
+  loadWorkspaceSettings,
+  mergeWorkspaceSettingsIntoSettings,
+  saveNamedArtifactsShared,
+  saveWorkspaceSettings,
+} from '../../lib/shared-workspace-browser';
 import { fetchJsonOrThrow } from '../../lib/httpCache';
+import { PERSISTENCE_TABLES } from '../../lib/persistence-surfaces';
 import {
   allianceForTeam,
   bestCountdownUnix,
@@ -285,18 +294,6 @@ function getSbTeleopEpa(teamEvent) {
 function getSbEndgameEpa(teamEvent) {
   const v = teamEvent?.epa?.breakdown?.endgame_points;
   return Number.isFinite(Number(v)) ? Number(v) : null;
-}
-function saveLocalJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
-function loadLocalJson(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
 }
 
 const CURRENT_TABS = [
@@ -616,6 +613,8 @@ export default function HomePage() {
   const [scenarioCompareSort, setScenarioCompareSort] = useState('furthest');
   const [currentCompareSyncKey, setCurrentCompareSyncKey] = useState(0);
   const [historicalCompareSyncKey, setHistoricalCompareSyncKey] = useState(0);
+  const [sharedWorkspaceReady, setSharedWorkspaceReady] = useState(false);
+  const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState(null);
   const webhookSentAtRef = useRef(new Map());
   const previousQueueStateRef = useRef(null);
   const previousOfflineModeRef = useRef(null);
@@ -637,6 +636,7 @@ export default function HomePage() {
         : majorTab === 'PREDICT'
           ? PREDICT_TABS
           : [];
+  const activeWorkspaceKey = useMemo(() => getEventWorkspaceKey(loadedEventKey), [loadedEventKey]);
 
   const activePageMeta = PAGE_META[majorTab]?.[tab] ?? PAGE_META.SETTINGS.SETTINGS;
   const language = settings.language ?? 'en';
@@ -819,48 +819,135 @@ export default function HomePage() {
     }
   }
   useEffect(() => {
-    const saved = loadSettings();
-    setSettings(saved);
-    setDraftTeam(saved.teamNumber);
-    setDraftEventKey(saved.eventKey);
-    if (saved.eventKey) {
-      setLoadedTeam(saved.teamNumber);
-      setLoadedEventKey(saved.eventKey);
+    let cancelled = false;
+
+    if (!activeWorkspaceKey) {
+      setSharedWorkspaceReady(false);
+      setHydratedWorkspaceKey(null);
+      setSavedPredictScenarios([]);
+      setSavedAllianceScenarios([]);
+      setPickLists([]);
+      setSavedPlayoffResults([]);
+      setCurrentCompareSyncKey((value) => value + 1);
+      setHistoricalCompareSyncKey((value) => value + 1);
+      return () => {
+        cancelled = true;
+      };
     }
-    const cached = localStorage.getItem('tbsb_last_snapshot_v1');
-    if (cached) {
+
+    async function hydrateSharedWorkspace() {
+      let loadedSuccessfully = false;
+      setSharedWorkspaceReady(false);
+      setHydratedWorkspaceKey(null);
+      setSavedPredictScenarios([]);
+      setSavedAllianceScenarios([]);
+      setPickLists([]);
+      setSavedPlayoffResults([]);
       try {
-        setSnapshot(JSON.parse(cached));
-      } catch {}
+        const [saved, predictScenarios, allianceScenarios, sharedPickLists, playoffResults] =
+          await Promise.all([
+            loadWorkspaceSettings(activeWorkspaceKey),
+            loadNamedArtifactsShared(PERSISTENCE_TABLES.predictScenarios, activeWorkspaceKey),
+            loadNamedArtifactsShared(PERSISTENCE_TABLES.allianceScenarios, activeWorkspaceKey),
+            loadNamedArtifactsShared(PERSISTENCE_TABLES.pickLists, activeWorkspaceKey),
+            loadNamedArtifactsShared(PERSISTENCE_TABLES.playoffResults, activeWorkspaceKey),
+          ]);
+        if (cancelled) return;
+        setSettings((prev) => mergeWorkspaceSettingsIntoSettings(prev, saved));
+        setSavedPredictScenarios(predictScenarios);
+        setSavedAllianceScenarios(allianceScenarios);
+        setPickLists(sharedPickLists);
+        setSavedPlayoffResults(playoffResults);
+        setCurrentCompareSyncKey((value) => value + 1);
+        setHistoricalCompareSyncKey((value) => value + 1);
+        setHydratedWorkspaceKey(activeWorkspaceKey);
+        loadedSuccessfully = true;
+      } catch (error) {
+        if (!cancelled) {
+          setErrorText(error?.message ?? 'Failed to load shared workspace state.');
+        }
+      } finally {
+        if (!cancelled) setSharedWorkspaceReady(loadedSuccessfully);
+      }
     }
-    setSavedPredictScenarios(loadLocalJson('tbsb_predict_scenarios_v1', []));
-    setSavedAllianceScenarios(loadLocalJson('tbsb_alliance_scenarios_v1', []));
-    setPickLists(loadLocalJson('tbsb_pick_lists_v1', []));
-    setSavedPlayoffResults(loadLocalJson('tbsb_playoff_results_v1', []));
-  }, []);
+
+    hydrateSharedWorkspace();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceKey]);
   useEffect(() => {
-    saveSettings(settings);
-  }, [settings]);
+    if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
+      return;
+    const id = window.setTimeout(() => {
+      void saveWorkspaceSettings(activeWorkspaceKey, settings).catch((error) => {
+        setErrorText(error?.message ?? 'Failed to save shared settings.');
+      });
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [activeWorkspaceKey, hydratedWorkspaceKey, settings, sharedWorkspaceReady]);
   useEffect(() => {
     if (typeof document === 'undefined') return;
     document.documentElement.dataset.theme = settings.themeId ?? 'graphite-dark';
     document.documentElement.lang = settings.language ?? 'en';
   }, [settings.language, settings.themeId]);
   useEffect(() => {
-    saveLocalJson('tbsb_predict_scenarios_v1', savedPredictScenarios);
-  }, [savedPredictScenarios]);
+    if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
+      return;
+    const id = window.setTimeout(() => {
+      void saveNamedArtifactsShared(
+        PERSISTENCE_TABLES.predictScenarios,
+        activeWorkspaceKey,
+        savedPredictScenarios,
+      ).catch((error) => {
+        setErrorText(error?.message ?? 'Failed to save shared predict scenarios.');
+      });
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [activeWorkspaceKey, hydratedWorkspaceKey, savedPredictScenarios, sharedWorkspaceReady]);
   useEffect(() => {
-    saveLocalJson('tbsb_alliance_scenarios_v1', savedAllianceScenarios);
-  }, [savedAllianceScenarios]);
+    if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
+      return;
+    const id = window.setTimeout(() => {
+      void saveNamedArtifactsShared(
+        PERSISTENCE_TABLES.allianceScenarios,
+        activeWorkspaceKey,
+        savedAllianceScenarios,
+      ).catch((error) => {
+        setErrorText(error?.message ?? 'Failed to save shared alliance scenarios.');
+      });
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [activeWorkspaceKey, hydratedWorkspaceKey, savedAllianceScenarios, sharedWorkspaceReady]);
   useEffect(() => {
-    saveLocalJson('tbsb_pick_lists_v1', pickLists);
-  }, [pickLists]);
+    if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
+      return;
+    const id = window.setTimeout(() => {
+      void saveNamedArtifactsShared(
+        PERSISTENCE_TABLES.pickLists,
+        activeWorkspaceKey,
+        pickLists,
+      ).catch((error) => {
+        setErrorText(error?.message ?? 'Failed to save shared pick lists.');
+      });
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [activeWorkspaceKey, hydratedWorkspaceKey, pickLists, sharedWorkspaceReady]);
   useEffect(() => {
-    saveLocalJson('tbsb_playoff_results_v1', savedPlayoffResults);
-  }, [savedPlayoffResults]);
-  useEffect(() => {
-    if (snapshot) localStorage.setItem('tbsb_last_snapshot_v1', JSON.stringify(snapshot));
-  }, [snapshot]);
+    if (!sharedWorkspaceReady || !activeWorkspaceKey || hydratedWorkspaceKey !== activeWorkspaceKey)
+      return;
+    const id = window.setTimeout(() => {
+      void saveNamedArtifactsShared(
+        PERSISTENCE_TABLES.playoffResults,
+        activeWorkspaceKey,
+        savedPlayoffResults,
+      ).catch((error) => {
+        setErrorText(error?.message ?? 'Failed to save shared playoff results.');
+      });
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [activeWorkspaceKey, hydratedWorkspaceKey, savedPlayoffResults, sharedWorkspaceReady]);
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
@@ -922,7 +1009,6 @@ export default function HomePage() {
     }
     setLoadedTeam(team);
     setLoadedEventKey(eventKey);
-    setSettings((prev) => ({ ...prev, teamNumber: team, eventKey }));
     setSelectedMatchKey(null);
     setSelectedTeamNumber(null);
     setStrategyTarget(null);
@@ -1454,14 +1540,35 @@ export default function HomePage() {
     if (!teamNumber || !Number.isFinite(Number(teamNumber))) return;
     const normalized = Math.floor(Number(teamNumber));
     const compareScope = majorTab === 'HISTORICAL' ? 'historical' : 'current';
-    addTeamToCompareDraft(normalized, loadedTeam ?? null, compareScope);
     if (compareScope === 'historical') {
-      setHistoricalCompareSyncKey((prev) => prev + 1);
       setHistoricalSubTab('COMPARE');
+      void addTeamToCompareDraftShared(
+        normalized,
+        loadedTeam ?? null,
+        compareScope,
+        activeWorkspaceKey,
+      )
+        .then(() => {
+          setHistoricalCompareSyncKey((prev) => prev + 1);
+        })
+        .catch((error) => {
+          setErrorText(error?.message ?? 'Failed to update shared compare draft.');
+        });
       return;
     }
-    setCurrentCompareSyncKey((prev) => prev + 1);
     setTab('COMPARE');
+    void addTeamToCompareDraftShared(
+      normalized,
+      loadedTeam ?? null,
+      compareScope,
+      activeWorkspaceKey,
+    )
+      .then(() => {
+        setCurrentCompareSyncKey((prev) => prev + 1);
+      })
+      .catch((error) => {
+        setErrorText(error?.message ?? 'Failed to update shared compare draft.');
+      });
   }
   const compositeRankMap = useMemo(() => {
     const map = new Map();

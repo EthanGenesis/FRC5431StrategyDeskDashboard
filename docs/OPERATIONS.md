@@ -60,6 +60,7 @@ The app now uses safe response parsing so these failures become readable app err
 - Client code must never read non-public env directly.
 - Production env scaffolding now includes optional Supabase keys in [.env.example](/c:/Users/ethan/Desktop/tbsb-dashboard/.env.example).
 - The GitHub + Supabase + Vercel setup sequence lives in [DEPLOYMENT_RUNBOOK.md](/c:/Users/ethan/Desktop/tbsb-dashboard/docs/DEPLOYMENT_RUNBOOK.md).
+- The current deployment assumption is a trusted shared-link workspace: event-scoped shared workspace tables are intended to be writable through the public Supabase client, while server-side cache writes stay behind the server-only service role. Personal shell preferences stay session-only and are not globally shared.
 
 ### Security headers
 
