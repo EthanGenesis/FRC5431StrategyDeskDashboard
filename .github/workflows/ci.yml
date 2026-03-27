@@ -12,7 +12,7 @@ jobs:
     env:
       TBA_AUTH_KEY: ci-placeholder-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -31,7 +31,7 @@ jobs:
     env:
       TBA_AUTH_KEY: ci-placeholder-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
