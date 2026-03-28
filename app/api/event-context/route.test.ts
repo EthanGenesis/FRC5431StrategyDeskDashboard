@@ -70,6 +70,13 @@ describe('/api/event-context', () => {
         generatedAtMs: 1,
         firstStatus: 'available',
         nexusStatus: 'available',
+        officialAvailability: 'full',
+        officialCounts: {
+          eventPresent: true,
+          rankings: 0,
+          matches: 0,
+          awards: 0,
+        },
         discrepancies: [],
         staleSeconds: 0,
         officialTimestamp: null,
@@ -99,6 +106,7 @@ describe('/api/event-context', () => {
     expect(body.media.preferredWebcastUrl).toContain('example.com');
     expect(body.validation.summary).toBe('Aligned');
     expect(body.liveSignals).toEqual([]);
+    expect(serverDataMocks.loadEventContext).toHaveBeenCalledWith('2026miket', null);
   });
 
   it('returns 400 for invalid event keys', async () => {

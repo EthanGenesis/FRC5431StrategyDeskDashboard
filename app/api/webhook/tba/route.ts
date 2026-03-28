@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import { z } from 'zod';
 import type { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 import { getAppEnv } from '../../../../lib/env';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../../lib/observability';
@@ -14,6 +14,80 @@ const tbaWebhookSchema = z.object({
   message_data: z.record(z.string(), z.unknown()).default({}),
   webhook_id: z.union([z.string(), z.number()]).optional(),
 });
+
+function readString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+}
+
+function readNullableString(value: unknown): string | null {
+  const normalized = readString(value).trim();
+  return normalized.length ? normalized : null;
+}
+
+function humanizeSignalType(messageType: string): string {
+  return `TBA ${String(messageType).replace(/_/g, ' ')}`;
+}
+
+function buildSignalBody(
+  messageType: string,
+  data: Record<string, unknown>,
+  eventRecord: Record<string, unknown> | null,
+  matchRecord: Record<string, unknown> | null,
+  teamRecord: Record<string, unknown> | null,
+): string {
+  const eventName =
+    readNullableString(eventRecord?.name) ??
+    readNullableString(data.event_name) ??
+    readNullableString(data.eventKey) ??
+    readNullableString(data.event_key);
+  const matchKey =
+    readNullableString(data.match_key) ??
+    readNullableString(matchRecord?.key) ??
+    readNullableString(matchRecord?.label) ??
+    readNullableString(data.match);
+  const teamKey =
+    readNullableString(data.team_key) ??
+    readNullableString(teamRecord?.key) ??
+    readNullableString(data.team);
+  const levelName =
+    readNullableString(data.level_name) ??
+    readNullableString(data.level) ??
+    readNullableString(data.description);
+  const broadcastText =
+    readNullableString(data.message) ??
+    readNullableString(data.text) ??
+    readNullableString(data.content) ??
+    readNullableString(data.body);
+
+  if (messageType === 'alliance_selection') {
+    return eventName
+      ? `${eventName} alliance selection is active. Send your rep.`
+      : 'Alliance selection is active. Send your rep.';
+  }
+
+  if (messageType === 'level_starting') {
+    return (
+      [levelName, matchKey, eventName].filter(Boolean).join(' • ') || 'A playoff level is starting.'
+    );
+  }
+
+  if (messageType === 'broadcast') {
+    return broadcastText ?? eventName ?? 'Event broadcast received.';
+  }
+
+  if (messageType === 'verification') {
+    return 'Webhook verification received.';
+  }
+
+  if (messageType === 'ping') {
+    return 'Webhook ping received.';
+  }
+
+  const parts = [matchKey, teamKey, eventName].filter(Boolean);
+  return parts.length ? parts.join(' • ') : `TBA webhook: ${messageType}`;
+}
 
 function isValidTbaSignature(rawBody: string, headerValue: string, secret: string): boolean {
   const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
@@ -55,10 +129,14 @@ function normalizeTbaWebhookSignal(payload: z.infer<typeof tbaWebhookSchema>) {
   const titleMap: Record<string, string> = {
     upcoming_match: 'Upcoming match',
     match_score: 'Match score posted',
+    match_video: 'Match video posted',
+    level_starting: 'Playoff level starting',
     alliance_selection: 'Alliance selection updated',
     awards_posted: 'Awards posted',
     schedule_updated: 'Schedule updated',
-    match_video: 'Match video posted',
+    broadcast: 'Event broadcast',
+    ping: 'Webhook ping',
+    verification: 'Webhook verification',
   };
 
   const matchKey =
@@ -70,14 +148,12 @@ function normalizeTbaWebhookSignal(payload: z.infer<typeof tbaWebhookSchema>) {
     (typeof teamRecord?.key === 'string' && teamRecord.key) ||
     null;
 
-  const bodyParts = [matchKey, teamKey].filter(Boolean);
-
   return {
     eventKey,
     source: 'tba_webhook',
     signalType: messageType,
-    title: titleMap[messageType] ?? `TBA ${messageType.replace(/_/g, ' ')}`,
-    body: bodyParts.length ? bodyParts.join(' • ') : `TBA webhook: ${messageType}`,
+    title: titleMap[messageType] ?? humanizeSignalType(messageType),
+    body: buildSignalBody(messageType, data, eventRecord, matchRecord, teamRecord),
     dedupeKey:
       `${eventKey}::${messageType}::${matchKey ?? ''}::${teamKey ?? ''}::${String(payload.webhook_id ?? '')}`.trim(),
     payload: {

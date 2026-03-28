@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ReactElement } from 'react';
 import { fetchJsonOrThrow } from '../lib/httpCache';
 import { teamNumberFromKey } from '../lib/logic';
+import { deriveTeamOpsFromNexusSnapshot } from '../lib/nexus-ops';
 import type { TeamProfileMatch, TeamProfileRouteResponse } from '../lib/strategy-types';
+import type { NexusOpsSnapshot } from '../lib/types';
 import AnalyticsChartBlock from './AnalyticsChartBlock';
 import SafeRichText from './SafeRichText';
 import DisclosureSection from './ui/DisclosureSection';
@@ -21,6 +23,7 @@ type TeamProfileTabProps = {
   suggestedTeamNumber?: number | null;
   forcedTeamNumber?: number | null;
   loadedEventKey?: string;
+  nexusSnapshot?: NexusOpsSnapshot | null;
   onOpenStrategy?: (target: StrategyTarget) => void;
   onAddToCompare?: (teamNumber: number) => void;
   scope?: TeamProfileScope;
@@ -37,6 +40,11 @@ function pct(value: unknown): string {
 function numericValue(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+function averageNumbers(values: (number | null | undefined)[]): number | null {
+  const cleaned = values.filter((value): value is number => Number.isFinite(Number(value)));
+  if (!cleaned.length) return null;
+  return cleaned.reduce((sum, value) => sum + value, 0) / cleaned.length;
 }
 function humanizeKey(key: string): string {
   return String(key)
@@ -56,10 +64,48 @@ function humanizeKey(key: string): string {
     .replace(/\bnext event\b/gi, 'Next Event')
     .replace(/\b([a-z])/g, (match) => match.toUpperCase());
 }
+function summarizeHistoricalPatterns(matches: TeamProfileMatch[]) {
+  const sorted = [...matches].sort((a, b) => Number(b.time ?? 0) - Number(a.time ?? 0));
+  const opponentCounts = new Map<number, number>();
+
+  for (const match of sorted) {
+    for (const teamKey of match.opponents ?? []) {
+      const teamNumber = teamNumberFromKey(teamKey);
+      if (teamNumber == null) continue;
+      opponentCounts.set(teamNumber, (opponentCounts.get(teamNumber) ?? 0) + 1);
+    }
+  }
+
+  const topOpponents = [...opponentCounts.entries()]
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0] - b[0];
+    })
+    .slice(0, 5)
+    .map(([teamNumber, count]) => ({ teamNumber, count }));
+
+  return {
+    count: sorted.length,
+    avgScore: averageNumbers(sorted.map((match) => numericValue(match.myScore))),
+    avgOppScore: averageNumbers(sorted.map((match) => numericValue(match.oppScore))),
+    avgMargin: averageNumbers(sorted.map((match) => numericValue(match.margin))),
+    avgAuto: averageNumbers(sorted.map((match) => numericValue(match.breakdown?.auto_points))),
+    avgTeleop: averageNumbers(sorted.map((match) => numericValue(match.breakdown?.teleop_points))),
+    avgEndgame: averageNumbers(
+      sorted.map((match) => numericValue(match.breakdown?.endgame_points)),
+    ),
+    avgEpa: averageNumbers(sorted.map((match) => numericValue(match.epaTotal))),
+    avgPostEpa: averageNumbers(sorted.map((match) => numericValue(match.epaPost))),
+    playoffCount: sorted.filter((match) => match.compLevel !== 'qm').length,
+    topOpponents,
+    recentMatches: sorted.slice(0, 5),
+  };
+}
 export default function TeamProfileTab({
   suggestedTeamNumber,
   forcedTeamNumber,
   loadedEventKey,
+  nexusSnapshot,
   onOpenStrategy,
   onAddToCompare,
   scope = 'current',
@@ -202,6 +248,22 @@ export default function TeamProfileTab({
       margin: match?.margin ?? null,
     }));
   }, [visibleHistoricalMatches]);
+  const visibleHistoricalLosses = useMemo(
+    () => visibleHistoricalMatches.filter((match) => match.result === 'loss'),
+    [visibleHistoricalMatches],
+  );
+  const visibleHistoricalWins = useMemo(
+    () => visibleHistoricalMatches.filter((match) => match.result === 'win'),
+    [visibleHistoricalMatches],
+  );
+  const lossPatternSummary = useMemo(
+    () => summarizeHistoricalPatterns(visibleHistoricalLosses),
+    [visibleHistoricalLosses],
+  );
+  const winPatternSummary = useMemo(
+    () => summarizeHistoricalPatterns(visibleHistoricalWins),
+    [visibleHistoricalWins],
+  );
   const breakdownEntries = useMemo<[string, unknown][]>(
     () => Object.entries(seasonSummary?.epa?.breakdown ?? {}) as [string, unknown][],
     [seasonSummary],
@@ -217,6 +279,10 @@ export default function TeamProfileTab({
   const historicalPlayedEvents = useMemo<LooseRecord[]>(
     () => (historical2026?.playedEvents as LooseRecord[] | undefined) ?? [],
     [historical2026],
+  );
+  const currentEventOps = useMemo(
+    () => deriveTeamOpsFromNexusSnapshot(nexusSnapshot ?? null, activeTeamNumber),
+    [activeTeamNumber, nexusSnapshot],
   );
   const currentNormEpa = seasonSummary?.epa?.norm ?? legacySummary?.norm_epa?.current ?? null;
   const recentNormEpa =
@@ -293,6 +359,22 @@ export default function TeamProfileTab({
                 <div style={{ marginTop: 10 }}>
                   <SafeRichText html={currentEvent?.eventStatusHtml ?? '-'} />
                 </div>
+                {currentEventOps ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                    {currentEventOps.pitAddress ? (
+                      <span className="badge">Pit {currentEventOps.pitAddress}</span>
+                    ) : null}
+                    {currentEventOps.inspectionStatus ? (
+                      <span className="badge">Inspection {currentEventOps.inspectionStatus}</span>
+                    ) : null}
+                    {currentEventOps.queueState ? (
+                      <span className="badge">{currentEventOps.queueState}</span>
+                    ) : null}
+                    {currentEventOps.bumperColor ? (
+                      <span className="badge">Bumper {currentEventOps.bumperColor}</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <DisclosureSection
@@ -711,6 +793,149 @@ export default function TeamProfileTab({
                 <div>District points: {seasonSummary?.district_points ?? '-'}</div>
                 <div>District rank: {seasonSummary?.district_rank ?? '-'}</div>
               </div>
+            </div>
+          </div>
+
+          <div className="grid-2">
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>What Beat Them Before?</div>
+              {lossPatternSummary.count ? (
+                <div className="stack-8">
+                  <div className="grid-2">
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Losses In View
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{lossPatternSummary.count}</div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Margin
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{fmt(lossPatternSummary.avgMargin, 1)}</div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Opp Score
+                      </div>
+                      <div style={{ fontWeight: 900 }}>
+                        {fmt(lossPatternSummary.avgOppScore, 1)}
+                      </div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Teleop In Losses
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{fmt(lossPatternSummary.avgTeleop, 1)}</div>
+                    </div>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Opponents in losses:{' '}
+                    {lossPatternSummary.topOpponents.length
+                      ? lossPatternSummary.topOpponents
+                          .map((entry) => `${entry.teamNumber} x${entry.count}`)
+                          .join(', ')
+                      : 'No repeated opponent pattern yet.'}
+                  </div>
+                  <div className="stack-8">
+                    <div style={{ fontWeight: 900 }}>Recent Losses To Study</div>
+                    {lossPatternSummary.recentMatches.map((match) => (
+                      <div
+                        key={`loss_${match.key}`}
+                        className="panel-2"
+                        style={{
+                          padding: 12,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 900 }}>
+                            {match.eventName} | {match.matchLabel}
+                          </div>
+                          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                            Score {fmt(match.myScore, 0)} / {fmt(match.oppScore, 0)} | Auto{' '}
+                            {fmt(match.breakdown?.auto_points, 1)} | Tele{' '}
+                            {fmt(match.breakdown?.teleop_points, 1)} | End{' '}
+                            {fmt(match.breakdown?.endgame_points, 1)}
+                          </div>
+                          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                            Opponents:{' '}
+                            {(match.opponents ?? [])
+                              .map((teamKey) => teamNumberFromKey(teamKey) ?? teamKey)
+                              .join(' ') || '-'}
+                          </div>
+                        </div>
+                        <button
+                          className="button"
+                          onClick={() =>
+                            onOpenStrategy?.({
+                              eventKey: match.eventKey,
+                              matchKey: match.key,
+                            })
+                          }
+                          disabled={!onOpenStrategy}
+                        >
+                          Open in STRATEGY
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="muted">No historical losses match the current filters yet.</div>
+              )}
+            </div>
+
+            <div className="panel" style={{ padding: 16 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>What Works When They Win?</div>
+              {winPatternSummary.count ? (
+                <div className="stack-8">
+                  <div className="grid-2">
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Wins In View
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{winPatternSummary.count}</div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Margin
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{fmt(winPatternSummary.avgMargin, 1)}</div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Score
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{fmt(winPatternSummary.avgScore, 1)}</div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        Avg Endgame In Wins
+                      </div>
+                      <div style={{ fontWeight: 900 }}>{fmt(winPatternSummary.avgEndgame, 1)}</div>
+                    </div>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Opponents in wins:{' '}
+                    {winPatternSummary.topOpponents.length
+                      ? winPatternSummary.topOpponents
+                          .map((entry) => `${entry.teamNumber} x${entry.count}`)
+                          .join(', ')
+                      : 'No repeated opponent pattern yet.'}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    EPA trend in wins: {fmt(winPatternSummary.avgEpa, 1)} to Post{' '}
+                    {fmt(winPatternSummary.avgPostEpa, 1)} | Playoff wins{' '}
+                    {winPatternSummary.playoffCount}
+                  </div>
+                </div>
+              ) : (
+                <div className="muted">No historical wins match the current filters yet.</div>
+              )}
             </div>
           </div>
 

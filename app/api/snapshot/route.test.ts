@@ -68,7 +68,7 @@ describe('/api/snapshot', () => {
     expect(body.media).toBeNull();
     expect(body.validation).toBeNull();
     expect(body.liveSignals).toEqual([]);
-    expect(serverDataMocks.loadEventContext).toHaveBeenCalledWith('2026miket');
+    expect(serverDataMocks.loadEventContext).toHaveBeenCalledWith('2026miket', 5431);
   });
 
   it('maps invalid input errors to a 400 response', async () => {

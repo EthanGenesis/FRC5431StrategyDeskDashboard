@@ -178,4 +178,56 @@ describe('/api/webhook/tba', () => {
     expect(response.status).toBe(200);
     expect(sourceCacheMocks.appendEventLiveSignal).not.toHaveBeenCalled();
   });
+
+  it('normalizes alliance selection into a desk-readable signal', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/webhook/tba', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message_type: 'alliance_selection',
+          webhook_id: 'alliance-1',
+          message_data: {
+            event_key: '2026test',
+            event_name: 'Test Regional',
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(sourceCacheMocks.appendEventLiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signalType: 'alliance_selection',
+        title: 'Alliance selection updated',
+        body: 'Test Regional alliance selection is active. Send your rep.',
+      }),
+    );
+  });
+
+  it('normalizes broadcast messages when an event key is present', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/webhook/tba', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message_type: 'broadcast',
+          webhook_id: 'broadcast-1',
+          message_data: {
+            event_key: '2026test',
+            message: 'Send your rep to the scoring table.',
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(sourceCacheMocks.appendEventLiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signalType: 'broadcast',
+        title: 'Event broadcast',
+        body: 'Send your rep to the scoring table.',
+      }),
+    );
+  });
 });

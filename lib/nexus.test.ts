@@ -67,8 +67,20 @@ describe('loadNexusOpsSnapshot', () => {
         status: 'available',
         currentMatchKey: 'Qualification 1',
         nextMatchKey: 'Qualification 2',
+        queueMatchesAway: 1,
         queueText: 'On field: Qualification 1',
         pitMapUrl: null,
+        pitsStatus: 'unsupported',
+        inspectionStatus: 'unsupported',
+        pitMapStatus: 'unsupported',
+        pitAddressByTeam: {},
+        inspectionByTeam: {},
+      }),
+    );
+    expect(snapshot?.matches[0]).toEqual(
+      expect.objectContaining({
+        label: 'Qualification 1',
+        status: 'On field',
       }),
     );
     expect(snapshot?.partsRequests).toHaveLength(1);
@@ -81,5 +93,59 @@ describe('loadNexusOpsSnapshot', () => {
 
     expect(snapshot?.status).toBe('disabled');
     expect(snapshot?.supported).toBe(false);
+  });
+
+  it('normalizes optional pit and inspection maps when present', async () => {
+    cacheMocks.cachedSourceJson.mockImplementation((_source: string, path: string) => {
+      if (path === '/event/2026txcle') {
+        return {
+          eventKey: '2026txcle',
+          matches: [
+            {
+              label: 'Qualification 3',
+              status: 'Queued',
+              redTeams: ['5431', '111', '222'],
+              blueTeams: ['333', '444', '555'],
+              times: {
+                estimatedQueueTime: 1710000000000,
+                estimatedOnDeckTime: 1710000060000,
+              },
+            },
+          ],
+          announcements: [],
+          partsRequests: [],
+        };
+      }
+      if (path === '/event/2026txcle/pits') {
+        return {
+          '5431': 'P-12',
+          '111': 'P-03',
+        };
+      }
+      if (path === '/event/2026txcle/inspection') {
+        return {
+          '5431': 'Passed',
+          '111': 'Pending',
+        };
+      }
+      if (path === '/event/2026txcle/map') {
+        return { url: 'https://example.com/pit-map' };
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadNexusOpsSnapshot('2026txcle');
+
+    expect(snapshot?.pitAddressByTeam).toEqual({
+      '111': 'P-03',
+      '5431': 'P-12',
+    });
+    expect(snapshot?.inspectionByTeam).toEqual({
+      '111': 'Pending',
+      '5431': 'Passed',
+    });
+    expect(snapshot?.pitMapStatus).toBe('available');
+    expect(snapshot?.inspectionStatus).toBe('available');
+    expect(snapshot?.pitsStatus).toBe('available');
   });
 });

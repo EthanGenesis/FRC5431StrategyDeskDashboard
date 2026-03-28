@@ -323,6 +323,9 @@ function buildSnapshotPayload() {
       queueMatchesAway: 1,
       queueText: 'Queue 1 away',
       pitMapUrl: 'https://example.com/pitmap',
+      pitsStatus: 'available',
+      inspectionStatus: 'available',
+      pitMapStatus: 'available',
       announcements: [
         {
           id: 'announcement-1',
@@ -342,6 +345,52 @@ function buildSnapshotPayload() {
       ],
       inspectionSummary: { passed: 20, pending: 5, failed: 1 },
       pits: [],
+      matches: [
+        {
+          label: 'Qualification 1',
+          status: 'Queued',
+          redTeams: [5431, 111, 222],
+          blueTeams: [333, 444, 555],
+          times: {
+            estimatedQueueTimeMs: 1_710_000_000_000,
+            estimatedOnDeckTimeMs: 1_710_000_060_000,
+            estimatedOnFieldTimeMs: 1_710_000_120_000,
+            estimatedStartTimeMs: 1_710_000_180_000,
+            actualQueueTimeMs: null,
+            actualOnDeckTimeMs: null,
+            actualOnFieldTimeMs: null,
+            actualStartTimeMs: null,
+          },
+        },
+      ],
+      pitAddressByTeam: {
+        '5431': 'P-12',
+        '111': 'P-03',
+      },
+      inspectionByTeam: {
+        '5431': 'Passed',
+        '111': 'Pending',
+      },
+      loadedTeamOps: {
+        teamNumber: 5431,
+        pitAddress: 'P-12',
+        inspectionStatus: 'Passed',
+        currentMatchLabel: `${EVENT_KEY}_qm1`,
+        nextMatchLabel: 'Qualification 1',
+        queueState: 'Queued: Qualification 1',
+        allianceColor: 'red',
+        bumperColor: 'RED',
+        queueMatchesAway: 0,
+        partsRequestCount: 1,
+        estimatedQueueTimeMs: 1_710_000_000_000,
+        estimatedOnDeckTimeMs: 1_710_000_060_000,
+        estimatedOnFieldTimeMs: 1_710_000_120_000,
+        estimatedStartTimeMs: 1_710_000_180_000,
+        actualQueueTimeMs: null,
+        actualOnDeckTimeMs: null,
+        actualOnFieldTimeMs: null,
+        actualStartTimeMs: null,
+      },
       raw: {
         status: { supported: true },
         pits: [],
@@ -375,6 +424,13 @@ function buildSnapshotPayload() {
       generatedAtMs: 1_710_000_000_000,
       firstStatus: 'available',
       nexusStatus: 'available',
+      officialAvailability: 'full',
+      officialCounts: {
+        eventPresent: true,
+        rankings: TEAM_NUMBERS.length,
+        matches: 1,
+        awards: 1,
+      },
       discrepancies: [
         {
           key: 'award_count',
@@ -390,6 +446,18 @@ function buildSnapshotPayload() {
       summary: '1 official discrepancy',
     },
     liveSignals: [
+      {
+        id: 'signal-2',
+        workspaceKey: `event:${EVENT_KEY}`,
+        eventKey: EVENT_KEY,
+        source: 'tba_webhook',
+        signalType: 'alliance_selection',
+        title: 'Alliance Selection Active',
+        body: 'Test Regional alliance selection is active. Send your rep.',
+        dedupeKey: `${EVENT_KEY}::alliance_selection`,
+        createdAtMs: 1_710_000_000_500,
+        payload: null,
+      },
       {
         id: 'signal-1',
         workspaceKey: `event:${EVENT_KEY}`,
@@ -407,7 +475,8 @@ function buildSnapshotPayload() {
 }
 
 function buildTeamProfilePayload(teamNumber: number) {
-  const compareRow = buildCompareRow(teamNumber, 1);
+  const rank = Math.max(1, TEAM_NUMBERS.findIndex((value) => value === teamNumber) + 1);
+  const compareRow = buildCompareRow(teamNumber, rank);
 
   return {
     generatedAtMs: 1_710_000_000_000,
@@ -694,9 +763,20 @@ test('match to strategy workflow is preserved', async ({ page }) => {
   await expect(page.getByText('QM1', { exact: true }).first()).toBeVisible();
   await page.getByText('QM1', { exact: true }).first().click();
   await expect(page.getByRole('button', { name: 'Open in STRATEGY' })).toBeVisible();
+  await expect(page.getByText('Pit P-12').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Open in STRATEGY' }).click();
   await expect(page.getByRole('button', { name: 'Pull Live 2026 Stats' })).toBeVisible();
+  await expect(page.getByText('Inspection Passed').first()).toBeVisible();
+  await expect(page.getByText('Strategy Framework')).toBeVisible();
+  await expect(page.getByText('Risk Meter')).toBeVisible();
+});
+
+test('now tab surfaces priority alliance-selection prompts', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await expect(page.getByText('Live Desk Prompt').first()).toBeVisible();
+  await expect(page.getByText('Send your rep.').first()).toBeVisible();
 });
 
 test('team profile and compare workflows are preserved', async ({ page }) => {
@@ -704,6 +784,7 @@ test('team profile and compare workflows are preserved', async ({ page }) => {
 
   await page.getByRole('button', { name: 'TEAM PROFILE' }).click();
   await expect(page.getByText('Loaded Event: Test Regional')).toBeVisible();
+  await expect(page.getByText('Pit P-12').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Add To COMPARE' }).first().click();
   await page.getByRole('button', { name: 'COMPARE', exact: true }).first().click();
@@ -724,6 +805,7 @@ test('settings raw payload explorer is preserved', async ({ page }) => {
   await expect(page.getByText('Raw Payload Explorer')).toBeVisible();
   await expect(page.getByRole('button', { name: 'DATA Route' })).toBeVisible();
   await expect(page.getByText('"eventKey": "2026test"')).toBeVisible();
+  await expect(page.getByText('/api/webhook/tba')).toBeVisible();
 });
 
 test('district tabs show FIT-only unavailable state for non-FIT events', async ({ page }) => {
@@ -749,4 +831,51 @@ test('event tab exposes ops, validation, media, and external tool surfaces', asy
   await expect(page.getByRole('link', { name: 'Open Webcast' })).toBeVisible();
   await expect(page.getByText('Queue 1 away').first()).toBeVisible();
   await expect(page.getByText('1 official discrepancy')).toBeVisible();
+  await expect(page.getByText('Pit Addresses')).toBeVisible();
+  await expect(page.getByText('Inspection Board')).toBeVisible();
+});
+
+test('predict surfaces public-data alliance heuristics', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'PREDICT' }).click();
+  await page.getByRole('button', { name: 'ALLIANCE', exact: true }).click();
+
+  await expect(page.getByText('Build Us', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Deny Rival', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Playoff Ready', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Highest Ceiling', { exact: true }).first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'PICK LIST', exact: true }).click();
+  await expect(page.getByText('Best build-us target')).toBeVisible();
+  await expect(page.getByText('Safest playoff target')).toBeVisible();
+  await expect(page.getByText('Highest ceiling target')).toBeVisible();
+
+  await page.getByRole('button', { name: 'LIVE ALLIANCE', exact: true }).click();
+  await expect(page.getByText('Playoff Ready', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Highest Ceiling', { exact: true }).first()).toBeVisible();
+});
+
+test('quick jump opens cross-workspace targets', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog', { name: 'Command Palette' })).toBeVisible();
+
+  await page.getByLabel('Command Palette Search').fill('team_profile: 5431');
+  await page.getByRole('button', { name: /TEAM_PROFILE: 5431/i }).click();
+
+  await expect(page.getByText('Loaded Event: Test Regional')).toBeVisible();
+});
+
+test('historical team profile surfaces loss-pattern intel', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'HISTORICAL' }).click();
+  await page.getByRole('button', { name: 'TEAM PROFILE' }).click();
+  await page.getByPlaceholder('Search 2026 team number').fill('111');
+  await page.getByRole('button', { name: 'Load TEAM_PROFILE' }).click();
+
+  await expect(page.getByText('What Beat Them Before?')).toBeVisible();
+  await expect(page.getByText('Recent Losses To Study')).toBeVisible();
 });

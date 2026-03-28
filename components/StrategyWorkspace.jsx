@@ -2,7 +2,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJsonOrThrow } from '../lib/httpCache';
 import { formatMatchLabel, safeNumber, sortMatches, teamNumberFromKey } from '../lib/logic';
+import { deriveTeamOpsFromNexusSnapshot } from '../lib/nexus-ops';
 import { PERSISTENCE_TABLES } from '../lib/persistence-surfaces';
+import {
+  STRATEGY_CONTINGENCY_LABELS,
+  STRATEGY_ROLE_LABELS,
+  STRATEGY_RISK_OPTIONS,
+  STRATEGY_TEMPLATES,
+  coerceStrategyRiskLevel,
+  createEmptyContingencies,
+  createEmptyRoleAssignments,
+  getStrategyTemplate,
+  normalizeContingencies,
+  normalizeRoleAssignments,
+} from '../lib/strategy-presets';
 import { makeStrategyRecordId } from '../lib/strategy-storage';
 import {
   getStrategyRecordByIdShared,
@@ -112,6 +125,10 @@ function createBlankRecord(eventKey, eventName, match) {
     },
     status: 'draft',
     notes: '',
+    templateId: null,
+    riskLevel: 'balanced',
+    roleAssignments: createEmptyRoleAssignments(),
+    contingencies: createEmptyContingencies(),
     autoBoard: createBlankBoard(match),
     teleopBoard: createBlankBoard(match),
     createdAtMs: now,
@@ -126,6 +143,11 @@ function buildCurrentContext(currentSnapshot, currentEventKey) {
     inputs: { eventKey: currentEventKey },
     tba: currentSnapshot.tba,
     sb: currentSnapshot.sb,
+    official: currentSnapshot.official ?? null,
+    nexus: currentSnapshot.nexus ?? null,
+    media: currentSnapshot.media ?? null,
+    validation: currentSnapshot.validation ?? null,
+    liveSignals: currentSnapshot.liveSignals ?? [],
   };
 }
 function teamName(teamInfo, teamNumber, teamKey) {
@@ -145,6 +167,10 @@ export default function StrategyWorkspace({
   const [strategyMeta, setStrategyMeta] = useState(null);
   const [status, setStatus] = useState('draft');
   const [notes, setNotes] = useState('');
+  const [templateId, setTemplateId] = useState('');
+  const [riskLevel, setRiskLevel] = useState('balanced');
+  const [roleAssignments, setRoleAssignments] = useState(createEmptyRoleAssignments);
+  const [contingencies, setContingencies] = useState(createEmptyContingencies);
   const [autoBoard, setAutoBoard] = useState({
     background: 'field',
     shapes: [],
@@ -162,6 +188,9 @@ export default function StrategyWorkspace({
   const [savedStrategies, setSavedStrategies] = useState([]);
   const [copySourceId, setCopySourceId] = useState('');
   const [copyScope, setCopyScope] = useState('full');
+  const [strategyLibrarySearch, setStrategyLibrarySearch] = useState('');
+  const [strategyLibraryStatusFilter, setStrategyLibraryStatusFilter] = useState('all');
+  const [strategyLibraryScopeFilter, setStrategyLibraryScopeFilter] = useState('all');
   const [actionError, setActionError] = useState('');
   const [autosaveStatus, setAutosaveStatus] = useState('Idle');
   const [liveTeamStats, setLiveTeamStats] = useState({});
@@ -365,6 +394,10 @@ export default function StrategyWorkspace({
       });
       setStatus(record.status ?? 'draft');
       setNotes(record.notes ?? '');
+      setTemplateId(String(record.templateId ?? ''));
+      setRiskLevel(coerceStrategyRiskLevel(record.riskLevel));
+      setRoleAssignments(normalizeRoleAssignments(record.roleAssignments));
+      setContingencies(normalizeContingencies(record.contingencies));
       const nextAuto = coerceBoard(record.autoBoard, selectedMatch);
       const nextTeleop = coerceBoard(record.teleopBoard, selectedMatch);
       setAutoBoard(nextAuto);
@@ -376,6 +409,10 @@ export default function StrategyWorkspace({
       lastSavedJsonRef.current = markLoaded
         ? JSON.stringify({
             ...record,
+            templateId: String(record.templateId ?? ''),
+            riskLevel: coerceStrategyRiskLevel(record.riskLevel),
+            roleAssignments: normalizeRoleAssignments(record.roleAssignments),
+            contingencies: normalizeContingencies(record.contingencies),
             autoBoard: nextAuto,
             teleopBoard: nextTeleop,
           })
@@ -470,10 +507,24 @@ export default function StrategyWorkspace({
       ...strategyMeta,
       notes,
       status,
+      templateId: templateId || null,
+      riskLevel,
+      roleAssignments,
+      contingencies,
       autoBoard,
       teleopBoard,
     };
-  }, [strategyMeta, notes, status, autoBoard, teleopBoard]);
+  }, [
+    strategyMeta,
+    notes,
+    status,
+    templateId,
+    riskLevel,
+    roleAssignments,
+    contingencies,
+    autoBoard,
+    teleopBoard,
+  ]);
   useEffect(() => {
     if (!recordLoaded || !currentRecord) return;
     const nextJson = JSON.stringify(currentRecord);
@@ -604,6 +655,10 @@ export default function StrategyWorkspace({
       }
       if (copyScope === 'full') {
         setStatus(source.status === 'final' ? 'final' : 'draft');
+        setTemplateId(String(source.templateId ?? ''));
+        setRiskLevel(coerceStrategyRiskLevel(source.riskLevel));
+        setRoleAssignments(normalizeRoleAssignments(source.roleAssignments));
+        setContingencies(normalizeContingencies(source.contingencies));
       }
       touchMeta({
         copiedFrom: {
@@ -640,6 +695,10 @@ export default function StrategyWorkspace({
     setTeleopPast([cloneValue(importedTeleop)]);
     setTeleopFuture([]);
     setNotes(String(source?.notes ?? ''));
+    setTemplateId(String(source?.templateId ?? ''));
+    setRiskLevel(coerceStrategyRiskLevel(source?.riskLevel));
+    setRoleAssignments(normalizeRoleAssignments(source?.roleAssignments));
+    setContingencies(normalizeContingencies(source?.contingencies));
     setStatus(source?.status === 'final' ? 'final' : 'draft');
     touchMeta({
       copiedFrom: {
@@ -705,6 +764,192 @@ export default function StrategyWorkspace({
     () => selectedMatchRows.filter((row) => row.alliance === 'blue'),
     [selectedMatchRows],
   );
+  const selectedTeamOptions = useMemo(
+    () =>
+      selectedMatchRows.map((row) => ({
+        value: row.teamKey,
+        label: `${row.teamNumber} ${row.nickname}`,
+      })),
+    [selectedMatchRows],
+  );
+  const strategyTemplate = useMemo(() => getStrategyTemplate(templateId), [templateId]);
+  const assignedRolesByTeam = useMemo(() => {
+    const roleMap = new Map();
+    for (const [roleKey, teamKey] of Object.entries(roleAssignments)) {
+      if (!teamKey) continue;
+      const label = STRATEGY_ROLE_LABELS[roleKey] ?? roleKey;
+      const current = roleMap.get(teamKey) ?? [];
+      current.push(label);
+      roleMap.set(teamKey, current);
+    }
+    return roleMap;
+  }, [roleAssignments]);
+  const currentTeamKeys = useMemo(
+    () => new Set(selectedMatchRows.map((row) => row.teamKey)),
+    [selectedMatchRows],
+  );
+  const strategyRoleSummary = useMemo(
+    () =>
+      Object.entries(roleAssignments)
+        .map(([roleKey, teamKey]) => {
+          if (!teamKey) return null;
+          const row = selectedMatchRows.find((candidate) => candidate.teamKey === teamKey);
+          const teamLabel = row ? `${row.teamNumber} ${row.nickname}` : teamKey;
+          return `${STRATEGY_ROLE_LABELS[roleKey] ?? roleKey}: ${teamLabel}`;
+        })
+        .filter(Boolean),
+    [roleAssignments, selectedMatchRows],
+  );
+  const strategyContingencySummary = useMemo(
+    () =>
+      Object.entries(contingencies)
+        .map(([contingencyKey, value]) => {
+          const text = String(value ?? '').trim();
+          if (!text) return null;
+          return `${STRATEGY_CONTINGENCY_LABELS[contingencyKey] ?? contingencyKey}: ${text}`;
+        })
+        .filter(Boolean),
+    [contingencies],
+  );
+  const strategyBriefText = useMemo(() => {
+    const lines = [
+      `${selectedMatch ? formatMatchLabel(selectedMatch) : 'Strategy Brief'} | ${eventContext?.tba?.event?.name ?? targetEventKey ?? ''}`.trim(),
+      `Status: ${String(status).toUpperCase()}`,
+      `Template: ${strategyTemplate?.label ?? 'Custom'}`,
+      `Risk: ${String(riskLevel).toUpperCase()}`,
+      '',
+      `Red Alliance: ${
+        (selectedMatch?.alliances?.red?.team_keys ?? [])
+          .map((teamKey) => teamNumberFromKey(teamKey) ?? teamKey)
+          .join(' ') || '-'
+      }`,
+      `Blue Alliance: ${
+        (selectedMatch?.alliances?.blue?.team_keys ?? [])
+          .map((teamKey) => teamNumberFromKey(teamKey) ?? teamKey)
+          .join(' ') || '-'
+      }`,
+      '',
+      'Role Assignments:',
+      ...(strategyRoleSummary.length ? strategyRoleSummary : ['No roles assigned yet.']),
+      '',
+      'Contingencies:',
+      ...(strategyContingencySummary.length
+        ? strategyContingencySummary
+        : ['No contingency branches written yet.']),
+      '',
+      'Notes:',
+      String(notes ?? '').trim() || 'No notes yet.',
+    ];
+    return lines.join('\n');
+  }, [
+    eventContext?.tba?.event?.name,
+    notes,
+    riskLevel,
+    selectedMatch,
+    status,
+    strategyContingencySummary,
+    strategyRoleSummary,
+    strategyTemplate?.label,
+    targetEventKey,
+  ]);
+  const filteredStrategyLibrary = useMemo(() => {
+    const query = strategyLibrarySearch.trim().toLowerCase();
+    return savedStrategies
+      .filter((row) => row.id !== strategyMeta?.id)
+      .map((row) => {
+        const overlap = [
+          ...(row.allianceTeams?.red ?? []),
+          ...(row.allianceTeams?.blue ?? []),
+        ].filter((teamKey) => currentTeamKeys.has(teamKey)).length;
+        return { ...row, overlap };
+      })
+      .filter((row) => {
+        if (strategyLibraryStatusFilter === 'all') return true;
+        return String(row.status ?? '') === strategyLibraryStatusFilter;
+      })
+      .filter((row) => {
+        if (strategyLibraryScopeFilter === 'all') return true;
+        if (strategyLibraryScopeFilter === 'same_event') {
+          return String(row.eventKey ?? '') === String(targetEventKey ?? '');
+        }
+        if (strategyLibraryScopeFilter === 'shared_teams') {
+          return Number(row.overlap ?? 0) > 0;
+        }
+        return true;
+      })
+      .filter((row) => {
+        if (!query) return true;
+        const haystack = [
+          row.eventName,
+          row.matchLabel,
+          row.status,
+          row.templateId,
+          row.riskLevel,
+          ...(row.allianceTeams?.red ?? []),
+          ...(row.allianceTeams?.blue ?? []),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+      .sort((a, b) => {
+        if (b.overlap !== a.overlap) return b.overlap - a.overlap;
+        return b.updatedAtMs - a.updatedAtMs;
+      })
+      .slice(0, 12);
+  }, [
+    currentTeamKeys,
+    savedStrategies,
+    strategyLibraryScopeFilter,
+    strategyLibrarySearch,
+    strategyLibraryStatusFilter,
+    strategyMeta?.id,
+    targetEventKey,
+  ]);
+  const recommendedCarryovers = useMemo(
+    () => filteredStrategyLibrary.slice(0, 3),
+    [filteredStrategyLibrary],
+  );
+  function handleApplyTemplate(nextTemplateId) {
+    const nextTemplate = getStrategyTemplate(nextTemplateId);
+    if (!nextTemplate) return;
+    setTemplateId(nextTemplate.id);
+    setRiskLevel(nextTemplate.riskLevel);
+    setContingencies(nextTemplate.contingencies);
+    setNotes((prev) => {
+      const trimmed = String(prev ?? '').trim();
+      const nextHeader = nextTemplate.notesPrompt.trim();
+      return trimmed ? `${nextHeader}\n\n${trimmed}` : nextHeader;
+    });
+    touchMeta();
+    setAutosaveStatus(`Applied ${nextTemplate.label}`);
+  }
+  async function copyTextToClipboard(text, successLabel) {
+    const nextText = String(text ?? '').trim();
+    if (!nextText) {
+      setActionError('Nothing to copy yet.');
+      return;
+    }
+    setActionError('');
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(nextText);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = nextText;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setAutosaveStatus(successLabel);
+    } catch (error) {
+      setActionError(error?.message ?? 'Clipboard copy failed');
+    }
+  }
   function renderTeamCard(row) {
     const liveProfile = liveTeamStats[row.teamNumber] ?? null;
     const liveSeasonSummary = liveProfile?.seasonSummary ?? null;
@@ -717,6 +962,7 @@ export default function StrategyWorkspace({
       liveSeasonSummary?.epa?.breakdown?.total_points ??
       null;
     const liveRecord = liveSeasonSummary?.record ?? liveSummary?.record ?? null;
+    const teamOps = deriveTeamOpsFromNexusSnapshot(eventContext?.nexus ?? null, row.teamNumber);
     return (
       <div
         key={row.teamKey}
@@ -773,6 +1019,27 @@ export default function StrategyWorkspace({
             <span className="muted">Not pulled yet. Use &quot;Pull Live 2026 Stats&quot;.</span>
           )}
         </div>
+        {teamOps ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {teamOps.pitAddress ? <span className="badge">Pit {teamOps.pitAddress}</span> : null}
+            {teamOps.inspectionStatus ? (
+              <span className="badge">Inspection {teamOps.inspectionStatus}</span>
+            ) : null}
+            {teamOps.queueState ? <span className="badge">{teamOps.queueState}</span> : null}
+            {teamOps.bumperColor ? (
+              <span className="badge">Bumper {teamOps.bumperColor}</span>
+            ) : null}
+          </div>
+        ) : null}
+        {(assignedRolesByTeam.get(row.teamKey) ?? []).length ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {(assignedRolesByTeam.get(row.teamKey) ?? []).map((roleLabel) => (
+              <span key={`${row.teamKey}_${roleLabel}`} className="badge badge-blue">
+                {roleLabel}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -868,6 +1135,24 @@ export default function StrategyWorkspace({
           <button className="button" onClick={exportCurrentRecord}>
             Export JSON
           </button>
+          <button
+            className="button"
+            type="button"
+            onClick={() => {
+              void copyTextToClipboard(strategyBriefText, 'Strategy brief copied');
+            }}
+          >
+            Copy Brief
+          </button>
+          <button
+            className="button"
+            type="button"
+            onClick={() => {
+              void copyTextToClipboard(notes, 'Strategy notes copied');
+            }}
+          >
+            Copy Notes
+          </button>
           <button className="button" onClick={() => importInputRef.current?.click()}>
             Import JSON
           </button>
@@ -927,6 +1212,20 @@ export default function StrategyWorkspace({
                 ({strategyMeta.copiedFrom.scope})
               </div>
             ) : null}
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                justifyContent: 'flex-end',
+                flexWrap: 'wrap',
+                marginTop: 8,
+              }}
+            >
+              {templateId ? (
+                <span className="badge">Template {strategyTemplate?.label ?? templateId}</span>
+              ) : null}
+              <span className="badge">Risk {String(riskLevel).toUpperCase()}</span>
+            </div>
           </div>
         </div>
         <div className="grid-2" style={{ marginTop: 16 }}>
@@ -938,6 +1237,26 @@ export default function StrategyWorkspace({
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Blue Alliance</div>
             <div className="mono">
               {selectedMatch?.alliances?.blue?.team_keys?.join(' ') ?? '-'}
+            </div>
+          </div>
+        </div>
+        <div className="grid-2" style={{ marginTop: 16 }}>
+          <div className="panel-2" style={{ padding: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Printable Brief</div>
+            <div className="muted" style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+              {strategyBriefText}
+            </div>
+          </div>
+          <div className="panel-2" style={{ padding: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Library Fit Summary</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Shared-team matches and saved finals stay closest to the top of the library. Use the
+              carryover controls below to pull plans forward without rewriting from scratch.
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+              <span className="badge">Current Teams {currentTeamKeys.size}</span>
+              <span className="badge">Saved Records {savedStrategies.length}</span>
+              <span className="badge">Filtered Results {filteredStrategyLibrary.length}</span>
             </div>
           </div>
         </div>
@@ -1012,6 +1331,277 @@ export default function StrategyWorkspace({
           </div>
         </div>
       </DisclosureSection>
+      <DisclosureSection
+        storageKey="ui.strategy.framework"
+        title="Strategy Framework"
+        description="Apply a plan template, assign alliance roles, and lock contingency branches without disturbing the drawing boards."
+        defaultOpen
+      >
+        <div className="panel" style={{ padding: 16 }}>
+          {recommendedCarryovers.length ? (
+            <div className="stack-8" style={{ marginBottom: 14 }}>
+              <div style={{ fontWeight: 900 }}>Recommended Carryovers</div>
+              <div className="grid-2">
+                {recommendedCarryovers.map((row) => (
+                  <div key={`carry_${row.id}`} className="panel-2" style={{ padding: 12 }}>
+                    <div style={{ fontWeight: 900 }}>
+                      {row.matchLabel} | {row.eventName}
+                    </div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Overlap {row.overlap} | {row.status} |{' '}
+                      {new Date(row.updatedAtMs).toLocaleString()}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => {
+                          setCopySourceId(row.id);
+                          setCopyScope('full');
+                          setAutosaveStatus(`Queued full carryover from ${row.matchLabel}`);
+                        }}
+                      >
+                        Queue Full Copy
+                      </button>
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => {
+                          setCopySourceId(row.id);
+                          setCopyScope('auto');
+                          setAutosaveStatus(`Queued AUTO carryover from ${row.matchLabel}`);
+                        }}
+                      >
+                        Queue AUTO Copy
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              marginBottom: 14,
+            }}
+          >
+            <select
+              className="input"
+              value={templateId}
+              onChange={(event) => setTemplateId(event.target.value)}
+              style={{ minWidth: 220 }}
+            >
+              <option value="">Template (optional)</option>
+              {STRATEGY_TEMPLATES.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.label}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button"
+              onClick={() => handleApplyTemplate(templateId)}
+              disabled={!templateId}
+            >
+              Apply Template
+            </button>
+            {STRATEGY_RISK_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                className="button"
+                type="button"
+                style={{ background: riskLevel === option.id ? '#182336' : undefined }}
+                onClick={() => {
+                  setRiskLevel(option.id);
+                  touchMeta();
+                }}
+              >
+                Risk: {option.label}
+              </button>
+            ))}
+          </div>
+          {strategyTemplate ? (
+            <div className="panel-2" style={{ padding: 12, marginBottom: 14 }}>
+              <div style={{ fontWeight: 900 }}>{strategyTemplate.label}</div>
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                {strategyTemplate.description}
+              </div>
+            </div>
+          ) : null}
+          <div className="grid-2" style={{ marginBottom: 14 }}>
+            {Object.entries(STRATEGY_ROLE_LABELS).map(([roleKey, roleLabel]) => (
+              <label key={roleKey} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {roleLabel}
+                </span>
+                <select
+                  className="input"
+                  value={roleAssignments[roleKey] ?? ''}
+                  onChange={(event) => {
+                    setRoleAssignments((prev) => ({
+                      ...prev,
+                      [roleKey]: event.target.value,
+                    }));
+                    touchMeta();
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  {selectedTeamOptions.map((option) => (
+                    <option key={`${roleKey}_${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+          <div className="grid-2">
+            {Object.entries(STRATEGY_CONTINGENCY_LABELS).map(
+              ([contingencyKey, contingencyLabel]) => (
+                <label
+                  key={contingencyKey}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                >
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {contingencyLabel}
+                  </span>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={contingencies[contingencyKey] ?? ''}
+                    onChange={(event) => {
+                      setContingencies((prev) => ({
+                        ...prev,
+                        [contingencyKey]: event.target.value,
+                      }));
+                      touchMeta();
+                    }}
+                    placeholder="Write the branch plan here..."
+                  />
+                </label>
+              ),
+            )}
+          </div>
+        </div>
+      </DisclosureSection>
+      <DisclosureSection
+        storageKey="ui.strategy.library"
+        title="Saved Strategy Library"
+        description="Search saved strategy records and reopen nearby or similar matches quickly."
+      >
+        <div className="panel" style={{ padding: 16 }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              marginBottom: 12,
+            }}
+          >
+            <input
+              className="input"
+              value={strategyLibrarySearch}
+              onChange={(event) => setStrategyLibrarySearch(event.target.value)}
+              placeholder="Search saved match, event, or team..."
+              style={{ minWidth: 280 }}
+            />
+            <select
+              className="input"
+              value={strategyLibraryStatusFilter}
+              onChange={(event) => setStrategyLibraryStatusFilter(event.target.value)}
+            >
+              <option value="all">All Statuses</option>
+              <option value="draft">Draft Only</option>
+              <option value="final">Final Only</option>
+            </select>
+            <select
+              className="input"
+              value={strategyLibraryScopeFilter}
+              onChange={(event) => setStrategyLibraryScopeFilter(event.target.value)}
+            >
+              <option value="all">All Saved Records</option>
+              <option value="same_event">Same Event</option>
+              <option value="shared_teams">Only Shared Teams</option>
+            </select>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Results are ranked by team overlap with the current match, then recency.
+            </span>
+          </div>
+          <div className="stack-8">
+            {filteredStrategyLibrary.map((row) => (
+              <div key={row.id} className="panel-2" style={{ padding: 12 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 900 }}>
+                      {row.eventName} | {row.matchLabel}
+                    </div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      {(row.allianceTeams?.red ?? []).join(' ')} |{' '}
+                      {(row.allianceTeams?.blue ?? []).join(' ')}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 6,
+                      flexWrap: 'wrap',
+                      justifyContent: 'flex-end',
+                    }}
+                  >
+                    <span className="badge">{row.status}</span>
+                    <span className="badge">Overlap {row.overlap}</span>
+                    {row.templateId ? (
+                      <span className="badge">
+                        Template {getStrategyTemplate(row.templateId)?.label ?? row.templateId}
+                      </span>
+                    ) : null}
+                    {row.riskLevel ? (
+                      <span className="badge">Risk {String(row.riskLevel).toUpperCase()}</span>
+                    ) : null}
+                    <button
+                      className="button"
+                      onClick={() =>
+                        onTargetChange({
+                          eventKey: row.eventKey,
+                          matchKey: row.matchKey,
+                        })
+                      }
+                    >
+                      Open
+                    </button>
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => {
+                        setCopySourceId(row.id);
+                        setCopyScope('full');
+                        setAutosaveStatus(`Queued full carryover from ${row.matchLabel}`);
+                      }}
+                    >
+                      Use For Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!filteredStrategyLibrary.length ? (
+              <div className="muted">No saved strategies match the current filter yet.</div>
+            ) : null}
+          </div>
+        </div>
+      </DisclosureSection>
 
       <DisclosureSection
         storageKey="ui.strategy.alliance_cards"
@@ -1083,6 +1673,29 @@ export default function StrategyWorkspace({
         defaultOpen
       >
         <div className="panel strategy-notes-block" style={{ padding: 16 }}>
+          <div className="grid-2" style={{ marginBottom: 12 }}>
+            <div className="panel-2" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Risk Meter</div>
+              <div style={{ fontSize: 22, fontWeight: 900 }}>
+                {(
+                  STRATEGY_RISK_OPTIONS.find((option) => option.id === riskLevel)?.label ??
+                  'Balanced'
+                ).toUpperCase()}
+              </div>
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                {STRATEGY_RISK_OPTIONS.find((option) => option.id === riskLevel)?.description}
+              </div>
+            </div>
+            <div className="panel-2" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Structured Plan</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Template {strategyTemplate?.label ?? 'Custom'} | Assigned Roles{' '}
+                {Object.values(roleAssignments).filter((value) => String(value).trim()).length} |
+                Contingencies{' '}
+                {Object.values(contingencies).filter((value) => String(value).trim()).length}
+              </div>
+            </div>
+          </div>
           <textarea
             className="input strategy-notes-input"
             value={notes}

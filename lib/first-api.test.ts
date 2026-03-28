@@ -81,4 +81,44 @@ describe('loadOfficialEventSnapshot', () => {
       district: null,
     });
   });
+
+  it('does not report empty official payloads as available', async () => {
+    cacheMocks.cachedSourceJson.mockResolvedValue({});
+
+    const snapshot = await loadOfficialEventSnapshot('2026txcle');
+
+    expect(snapshot?.status).toBe('partial');
+    expect(snapshot?.event).toBeNull();
+    expect(snapshot?.matches).toEqual([]);
+    expect(snapshot?.awards).toEqual([]);
+  });
+
+  it('marks partial official payloads as partial', async () => {
+    cacheMocks.cachedSourceJson.mockImplementation((_source: string, path: string) => {
+      if (String(path).includes('/events?eventCode=')) {
+        return {
+          Events: [{ name: 'Space City', districtCode: 'FIT', districtName: 'FIRST In Texas' }],
+        };
+      }
+      if (String(path).includes('/matches/')) {
+        return { Matches: [] };
+      }
+      if (String(path).includes('/rankings/')) {
+        throw new Error('rankings unavailable');
+      }
+      if (String(path).includes('/awards/event/')) {
+        return { Awards: [] };
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadOfficialEventSnapshot('2026txcle');
+
+    expect(snapshot?.status).toBe('partial');
+    expect(snapshot?.event).toEqual(
+      expect.objectContaining({
+        name: 'Space City',
+      }),
+    );
+  });
 });

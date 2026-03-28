@@ -18,6 +18,7 @@ import type {
 } from './types';
 import { getAppEnv } from './env';
 import { loadNexusOpsSnapshot } from './nexus';
+import { deriveTeamOpsFromNexusSnapshot } from './nexus-ops';
 import { sbGet } from './statbotics';
 import { tbaGet } from './tba';
 
@@ -202,6 +203,18 @@ function buildValidationSnapshot(input: {
     : Array.isArray(official?.rankings?.rankings)
       ? official.rankings.rankings.length
       : null;
+  const officialMatchCount = Array.isArray(official?.matches) ? official.matches.length : 0;
+  const officialAwardCount = Array.isArray(official?.awards) ? official.awards.length : 0;
+  const officialEventPresent = Boolean(official?.event);
+  const officialAvailability =
+    officialEventPresent && official?.rankings && Array.isArray(official?.matches)
+      ? ('full' as const)
+      : officialEventPresent ||
+          official?.rankings ||
+          Array.isArray(official?.matches) ||
+          Array.isArray(official?.awards)
+        ? ('partial' as const)
+        : ('unavailable' as const);
 
   const discrepancies: SourceDiscrepancy[] = [
     createDiscrepancy(
@@ -243,16 +256,29 @@ function buildValidationSnapshot(input: {
       : null;
 
   const summary =
-    mismatchCount > 0
-      ? `${mismatchCount} official discrepanc${mismatchCount === 1 ? 'y' : 'ies'}`
-      : missingCount > 0
-        ? `${missingCount} official comparison gap${missingCount === 1 ? '' : 's'}`
-        : 'Working and official overlap checks are aligned';
+    officialAvailability === 'unavailable'
+      ? 'Official FIRST data unavailable for overlap checks'
+      : officialAvailability === 'partial'
+        ? mismatchCount > 0
+          ? `${mismatchCount} official discrepanc${mismatchCount === 1 ? 'y' : 'ies'} with partial FIRST coverage`
+          : 'Official FIRST data is partial for this event'
+        : mismatchCount > 0
+          ? `${mismatchCount} official discrepanc${mismatchCount === 1 ? 'y' : 'ies'}`
+          : missingCount > 0
+            ? `${missingCount} official comparison gap${missingCount === 1 ? '' : 's'}`
+            : 'Working and official overlap checks are aligned';
 
   return {
     generatedAtMs: Date.now(),
     firstStatus,
     nexusStatus,
+    officialAvailability,
+    officialCounts: {
+      eventPresent: officialEventPresent,
+      rankings: officialRankingCount ?? 0,
+      matches: officialMatchCount,
+      awards: officialAwardCount,
+    },
     discrepancies,
     staleSeconds,
     officialTimestamp: readNullableString(official?.event?.dateStart),
@@ -280,7 +306,10 @@ function normalizeLiveSignals(rows: Record<string, unknown>[]): LiveSignal[] {
   }));
 }
 
-export async function loadEventContext(eventKey: string): Promise<LoadedEventContext> {
+export async function loadEventContext(
+  eventKey: string,
+  loadedTeamNumber: number | null = null,
+): Promise<LoadedEventContext> {
   const { TBA_AUTH_KEY } = getAppEnv();
 
   const [
@@ -332,6 +361,13 @@ export async function loadEventContext(eventKey: string): Promise<LoadedEventCon
   ]);
 
   const normalizedLiveSignals = normalizeLiveSignals(liveSignalsRaw ?? []);
+  const enrichedNexus =
+    nexus != null
+      ? {
+          ...nexus,
+          loadedTeamOps: deriveTeamOpsFromNexusSnapshot(nexus, loadedTeamNumber),
+        }
+      : null;
   const validation = buildValidationSnapshot({
     eventKey,
     tbaEvent: event ?? null,
@@ -339,7 +375,7 @@ export async function loadEventContext(eventKey: string): Promise<LoadedEventCon
     tbaRankings: rankings ?? null,
     tbaAwards: awards ?? [],
     official: official ?? null,
-    nexus: nexus ?? null,
+    nexus: enrichedNexus ?? null,
     liveSignals: normalizedLiveSignals,
   });
   const mediaSnapshot = buildEventMediaSnapshot(event ?? null, media ?? []);
@@ -356,7 +392,7 @@ export async function loadEventContext(eventKey: string): Promise<LoadedEventCon
         matchCount: (matches ?? []).length,
       },
       official: official ?? null,
-      nexus: nexus ?? null,
+      nexus: enrichedNexus ?? null,
       media: mediaSnapshot,
       validation,
     },
@@ -381,7 +417,7 @@ export async function loadEventContext(eventKey: string): Promise<LoadedEventCon
       teamMatches: sbTeamMatches ?? [],
     },
     official: official ?? null,
-    nexus: nexus ?? null,
+    nexus: enrichedNexus ?? null,
     media: mediaSnapshot,
     validation,
     liveSignals: normalizedLiveSignals,

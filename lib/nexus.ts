@@ -3,6 +3,7 @@ import { cachedSourceJson } from './source-cache-server';
 import type {
   NexusAnnouncement,
   NexusInspectionSummary,
+  NexusMatchStatus,
   NexusOpsSnapshot,
   NexusPartsRequest,
   SourceStatus,
@@ -34,11 +35,20 @@ async function nexusGet<T>(requestPath: string): Promise<T> {
   );
 }
 
-async function nexusGetOptional<T>(requestPath: string): Promise<T | null> {
+async function nexusGetOptionalDetailed<T>(
+  requestPath: string,
+): Promise<{ data: T | null; status: SourceStatus }> {
   try {
-    return await nexusGet<T>(requestPath);
-  } catch {
-    return null;
+    return {
+      data: await nexusGet<T>(requestPath),
+      status: 'available',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    return {
+      data: null,
+      status: message.includes('404') ? 'unsupported' : 'error',
+    };
   }
 }
 
@@ -82,6 +92,78 @@ function summarizeInspection(items: Record<string, unknown>[]): NexusInspectionS
   return { passed, pending, failed };
 }
 
+function normalizeTeamList(values: unknown): number[] {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.floor(value));
+}
+
+function normalizeMatchTimes(value: unknown) {
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const readTime = (key: string) =>
+    Number.isFinite(Number(record[key])) ? Number(record[key]) : null;
+
+  return {
+    estimatedQueueTimeMs: readTime('estimatedQueueTime'),
+    estimatedOnDeckTimeMs: readTime('estimatedOnDeckTime'),
+    estimatedOnFieldTimeMs: readTime('estimatedOnFieldTime'),
+    estimatedStartTimeMs: readTime('estimatedStartTime'),
+    actualQueueTimeMs: readTime('actualQueueTime'),
+    actualOnDeckTimeMs: readTime('actualOnDeckTime'),
+    actualOnFieldTimeMs: readTime('actualOnFieldTime'),
+    actualStartTimeMs: readTime('actualStartTime'),
+  };
+}
+
+function normalizeMatchRow(item: Record<string, unknown>): NexusMatchStatus {
+  return {
+    label: readString(item.label, 'Match'),
+    status: readString(item.status, 'Unknown'),
+    redTeams: normalizeTeamList(item.redTeams ?? item.red_teams ?? item.red),
+    blueTeams: normalizeTeamList(item.blueTeams ?? item.blue_teams ?? item.blue),
+    times: normalizeMatchTimes(item.times),
+  };
+}
+
+function normalizeTeamValueMap(value: unknown, valueKeys: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      if (!item || typeof item !== 'object') return;
+      const record = item as Record<string, unknown>;
+      const teamKey = readNullableString(
+        record.team_number ?? record.teamNumber ?? record.team ?? record.key ?? index,
+      );
+      const resolvedValue =
+        valueKeys.map((key) => readNullableString(record[key])).find(Boolean) ?? null;
+      if (teamKey && resolvedValue) out[teamKey.replace(/^frc/i, '')] = resolvedValue;
+    });
+    return out;
+  }
+
+  if (!value || typeof value !== 'object') return out;
+
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+      const resolved = readNullableString(item);
+      if (resolved) out[key.replace(/^frc/i, '')] = resolved;
+      return;
+    }
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      const resolvedValue =
+        valueKeys.map((candidate) => readNullableString(record[candidate])).find(Boolean) ??
+        readNullableString(record.value);
+      if (resolvedValue) out[key.replace(/^frc/i, '')] = resolvedValue;
+    }
+  });
+
+  return out;
+}
+
 function sourceStatus(
   enabled: boolean,
   rawStatus: Record<string, unknown> | null,
@@ -111,13 +193,8 @@ function readNexusArray(value: unknown, fallbackKey?: string): Record<string, un
   return [];
 }
 
-function deriveQueueSummary(matches: Record<string, unknown>[]) {
-  const normalizedMatches = matches
-    .map((item) => ({
-      label: readString(item.label, 'Match'),
-      status: readString(item.status, 'Unknown'),
-    }))
-    .filter((item) => item.label.trim().length > 0);
+function deriveQueueSummary(matches: NexusMatchStatus[]) {
+  const normalizedMatches = matches.filter((item) => item.label.trim().length > 0);
 
   const active =
     normalizedMatches.find((item) => /on field|playing|in progress/i.test(item.status)) ??
@@ -129,10 +206,16 @@ function deriveQueueSummary(matches: Record<string, unknown>[]) {
     active == null
       ? (normalizedMatches[0] ?? null)
       : (normalizedMatches.find((item) => item.label !== active.label) ?? null);
+  const activeIndex = active
+    ? normalizedMatches.findIndex((item) => item.label === active.label)
+    : -1;
+  const nextIndex = next ? normalizedMatches.findIndex((item) => item.label === next.label) : -1;
 
   return {
     currentMatchKey: active?.label ?? null,
     nextMatchKey: next?.label ?? null,
+    queueMatchesAway:
+      activeIndex >= 0 && nextIndex >= 0 ? Math.max(0, nextIndex - activeIndex) : null,
     queueText: active ? `${active.status}: ${active.label}` : null,
   };
 }
@@ -148,10 +231,17 @@ export async function loadNexusOpsSnapshot(eventKey: string): Promise<NexusOpsSn
       queueMatchesAway: null,
       queueText: null,
       pitMapUrl: null,
+      pitsStatus: 'disabled',
+      inspectionStatus: 'disabled',
+      pitMapStatus: 'disabled',
       announcements: [],
       partsRequests: [],
       inspectionSummary: null,
       pits: [],
+      matches: [],
+      pitAddressByTeam: {},
+      inspectionByTeam: {},
+      loadedTeamOps: null,
       raw: {
         status: null,
         pits: [],
@@ -166,45 +256,76 @@ export async function loadNexusOpsSnapshot(eventKey: string): Promise<NexusOpsSn
   let error: unknown = null;
 
   try {
-    const [eventState, pits, pitMap, inspection] = await Promise.all([
+    const [eventState, pitsResult, pitMapResult, inspectionResult] = await Promise.all([
       nexusGet<Record<string, unknown>>(`/event/${encodeURIComponent(eventKey)}`),
-      nexusGetOptional<Record<string, unknown> | Record<string, unknown>[]>(
+      nexusGetOptionalDetailed<Record<string, unknown> | Record<string, unknown>[]>(
         `/event/${encodeURIComponent(eventKey)}/pits`,
       ),
-      nexusGetOptional<Record<string, unknown> | string>(
+      nexusGetOptionalDetailed<Record<string, unknown> | string>(
         `/event/${encodeURIComponent(eventKey)}/map`,
       ),
-      nexusGetOptional<Record<string, unknown> | Record<string, unknown>[]>(
+      nexusGetOptionalDetailed<Record<string, unknown> | Record<string, unknown>[]>(
         `/event/${encodeURIComponent(eventKey)}/inspection`,
       ),
     ]);
 
     const statusRecord = eventState ?? null;
-    const matchRows = readNexusArray(eventState?.matches);
+    const matchRows = readNexusArray(eventState?.matches).map(normalizeMatchRow);
     const announcementRows = readNexusArray(eventState?.announcements, 'announcements');
     const partsRows = readNexusArray(eventState?.partsRequests, 'partsRequests');
-    const pitRows = readNexusArray(pits, 'pits');
-    const inspectionRows = readNexusArray(inspection, 'items');
+    const pitRows = readNexusArray(pitsResult.data, 'pits');
+    const inspectionRows = readNexusArray(inspectionResult.data, 'items');
     const queueSummary = deriveQueueSummary(matchRows);
+    const pitMap = pitMapResult.data;
     const pitMapRecord = pitMap && typeof pitMap === 'object' ? pitMap : null;
     const rawPitMap = pitMapRecord ?? (typeof pitMap === 'string' ? { url: pitMap } : null);
     const pitMapUrl =
       (typeof pitMap === 'string' ? readNullableString(pitMap) : null) ??
       readNullableString(pitMapRecord?.image_url) ??
       readNullableString(pitMapRecord?.url);
+    const pitAddressByTeam = normalizeTeamValueMap(pitsResult.data, [
+      'pit',
+      'pitAddress',
+      'address',
+      'pit_id',
+      'pitId',
+      'label',
+      'text',
+    ]);
+    const inspectionByTeam = normalizeTeamValueMap(inspectionResult.data, [
+      'status',
+      'state',
+      'inspectionStatus',
+      'inspection_state',
+      'label',
+      'text',
+    ]);
 
     return {
       supported: true,
       status: sourceStatus(enabled, statusRecord, null),
       currentMatchKey: queueSummary.currentMatchKey,
       nextMatchKey: queueSummary.nextMatchKey,
-      queueMatchesAway: null,
+      queueMatchesAway: queueSummary.queueMatchesAway,
       queueText: queueSummary.queueText,
       pitMapUrl,
+      pitsStatus: pitsResult.status,
+      inspectionStatus: inspectionResult.status,
+      pitMapStatus: pitMapResult.status,
       announcements: announcementRows.map(normalizeAnnouncement),
       partsRequests: partsRows.map(normalizePartsRequest),
-      inspectionSummary: summarizeInspection(inspectionRows),
+      inspectionSummary:
+        summarizeInspection(inspectionRows) ??
+        summarizeInspection(
+          Object.values(inspectionByTeam).map((status) => ({
+            status,
+          })),
+        ),
       pits: pitRows,
+      matches: matchRows,
+      pitAddressByTeam,
+      inspectionByTeam,
+      loadedTeamOps: null,
       raw: {
         status: statusRecord,
         pits: pitRows,
@@ -226,10 +347,17 @@ export async function loadNexusOpsSnapshot(eventKey: string): Promise<NexusOpsSn
     queueMatchesAway: null,
     queueText: null,
     pitMapUrl: null,
+    pitsStatus: 'error',
+    inspectionStatus: 'error',
+    pitMapStatus: 'error',
     announcements: [],
     partsRequests: [],
     inspectionSummary: null,
     pits: [],
+    matches: [],
+    pitAddressByTeam: {},
+    inspectionByTeam: {},
+    loadedTeamOps: null,
     raw: {
       status: null,
       pits: [],

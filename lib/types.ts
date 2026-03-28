@@ -41,7 +41,7 @@ export type EventMediaSnapshot = {
   media: ExternalArray;
 };
 
-export type SourceStatus = 'available' | 'disabled' | 'unsupported' | 'error';
+export type SourceStatus = 'available' | 'disabled' | 'unsupported' | 'error' | 'partial';
 
 export type SourceDiscrepancy = {
   key: string;
@@ -56,6 +56,13 @@ export type ValidationSnapshot = {
   generatedAtMs: number;
   firstStatus: SourceStatus;
   nexusStatus: SourceStatus;
+  officialAvailability: 'unavailable' | 'partial' | 'full';
+  officialCounts: {
+    eventPresent: boolean;
+    rankings: number;
+    matches: number;
+    awards: number;
+  };
   discrepancies: SourceDiscrepancy[];
   staleSeconds: number | null;
   officialTimestamp: string | null;
@@ -83,6 +90,46 @@ export type NexusInspectionSummary = {
   failed: number | null;
 };
 
+export type NexusMatchTimes = {
+  estimatedQueueTimeMs: number | null;
+  estimatedOnDeckTimeMs: number | null;
+  estimatedOnFieldTimeMs: number | null;
+  estimatedStartTimeMs: number | null;
+  actualQueueTimeMs: number | null;
+  actualOnDeckTimeMs: number | null;
+  actualOnFieldTimeMs: number | null;
+  actualStartTimeMs: number | null;
+};
+
+export type NexusMatchStatus = {
+  label: string;
+  status: string;
+  redTeams: number[];
+  blueTeams: number[];
+  times: NexusMatchTimes;
+};
+
+export type NexusTeamOps = {
+  teamNumber: number;
+  pitAddress: string | null;
+  inspectionStatus: string | null;
+  currentMatchLabel: string | null;
+  nextMatchLabel: string | null;
+  queueState: string | null;
+  allianceColor: AllianceColor | null;
+  bumperColor: string | null;
+  queueMatchesAway: number | null;
+  partsRequestCount: number;
+  estimatedQueueTimeMs: number | null;
+  estimatedOnDeckTimeMs: number | null;
+  estimatedOnFieldTimeMs: number | null;
+  estimatedStartTimeMs: number | null;
+  actualQueueTimeMs: number | null;
+  actualOnDeckTimeMs: number | null;
+  actualOnFieldTimeMs: number | null;
+  actualStartTimeMs: number | null;
+};
+
 export type NexusOpsSnapshot = {
   supported: boolean;
   status: SourceStatus;
@@ -91,10 +138,17 @@ export type NexusOpsSnapshot = {
   queueMatchesAway: number | null;
   queueText: string | null;
   pitMapUrl: string | null;
+  pitsStatus: SourceStatus;
+  inspectionStatus: SourceStatus;
+  pitMapStatus: SourceStatus;
   announcements: NexusAnnouncement[];
   partsRequests: NexusPartsRequest[];
   inspectionSummary: NexusInspectionSummary | null;
   pits: ExternalArray;
+  matches: NexusMatchStatus[];
+  pitAddressByTeam: Record<string, string>;
+  inspectionByTeam: Record<string, string>;
+  loadedTeamOps?: NexusTeamOps | null;
   raw: {
     status: ExternalRecord | null;
     pits: ExternalArray;

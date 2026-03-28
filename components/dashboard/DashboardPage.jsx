@@ -43,6 +43,8 @@ import {
   teamNumberFromKey,
   tbaTeamKey,
 } from '../../lib/logic';
+import { deriveTeamOpsFromNexusSnapshot } from '../../lib/nexus-ops';
+import { buildAllianceCandidateInsights } from '../../lib/alliance-insights';
 import {
   LANGUAGE_OPTIONS,
   THEME_OPTIONS,
@@ -82,6 +84,9 @@ function averageNullable(values) {
   const cleaned = values.filter((v) => v != null && Number.isFinite(Number(v))).map(Number);
   if (!cleaned.length) return null;
   return mean(cleaned);
+}
+function topInsightRows(rows, key) {
+  return [...rows].sort((a, b) => Number(b?.[key] ?? 0) - Number(a?.[key] ?? 0)).slice(0, 3);
 }
 function parseLocalDateOnly(value) {
   if (typeof value !== 'string' || !value) return null;
@@ -578,6 +583,9 @@ export default function HomePage() {
   const [nowMs, setNowMs] = useState(Date.now());
   const [armedAudio, setArmedAudio] = useState(false);
   const [settingsRawPayloadOpen, setSettingsRawPayloadOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
+  const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
   const [webhookDelivery, setWebhookDelivery] = useState({
     pending: false,
     lastSuccessAtMs: null,
@@ -632,6 +640,7 @@ export default function HomePage() {
   const skipAllianceSaveRef = useRef(false);
   const skipPickListSaveRef = useRef(false);
   const skipPlayoffSaveRef = useRef(false);
+  const commandPaletteInputRef = useRef(null);
   const tab =
     majorTab === 'CURRENT'
       ? currentSubTab
@@ -717,11 +726,13 @@ export default function HomePage() {
   }, [loadedEventKey, nowMs, snapshot?.tba?.event, t]);
   const sourceStatusBadgeClass = (status) => {
     if (status === 'available') return 'badge-green';
+    if (status === 'partial') return 'badge-yellow';
     if (status === 'error') return 'badge-red';
     return '';
   };
   const sourceStatusLabel = (status) => {
     if (status === 'available') return t('status.available', 'Available');
+    if (status === 'partial') return t('status.partial', 'Partial');
     if (status === 'error') return t('status.error', 'Error');
     if (status === 'unsupported') return t('status.unsupported', 'Unsupported');
     return t('status.disabled', 'Disabled');
@@ -737,9 +748,86 @@ export default function HomePage() {
     };
   }, [sourceValidation]);
   const recentLiveSignals = useMemo(() => liveSignals.slice(0, 6), [liveSignals]);
+  const lastLiveSignal = recentLiveSignals[0] ?? null;
+  const priorityLiveSignal = useMemo(
+    () =>
+      recentLiveSignals.find((signal) =>
+        ['alliance_selection', 'broadcast'].includes(String(signal?.signalType ?? '')),
+      ) ?? null,
+    [recentLiveSignals],
+  );
+  const featuredLiveSignal =
+    lastLiveSignal &&
+    ['alliance_selection', 'broadcast'].includes(String(lastLiveSignal.signalType ?? ''))
+      ? lastLiveSignal
+      : priorityLiveSignal;
   const preferredWebcast = useMemo(
     () => mediaSnapshot?.webcasts?.find((entry) => entry?.embedUrl || entry?.url) ?? null,
     [mediaSnapshot],
+  );
+  const loadedTeamOps = useMemo(
+    () =>
+      nexusSnapshot?.loadedTeamOps ??
+      deriveTeamOpsFromNexusSnapshot(nexusSnapshot, loadedTeam ?? null),
+    [loadedTeam, nexusSnapshot],
+  );
+  const pitAddressRows = useMemo(() => {
+    const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
+      teamNumber: Number(teamNumber),
+      pitAddress: pit,
+    }));
+    return rows.sort((a, b) => {
+      if (a.teamNumber === loadedTeam) return -1;
+      if (b.teamNumber === loadedTeam) return 1;
+      return a.teamNumber - b.teamNumber;
+    });
+  }, [loadedTeam, nexusSnapshot?.pitAddressByTeam]);
+  const inspectionRows = useMemo(() => {
+    const rows = Object.entries(nexusSnapshot?.inspectionByTeam ?? {}).map(
+      ([teamNumber, status]) => ({
+        teamNumber: Number(teamNumber),
+        status,
+      }),
+    );
+    return rows.sort((a, b) => {
+      if (a.teamNumber === loadedTeam) return -1;
+      if (b.teamNumber === loadedTeam) return 1;
+      return a.teamNumber - b.teamNumber;
+    });
+  }, [loadedTeam, nexusSnapshot?.inspectionByTeam]);
+  const formatOpsTime = useCallback(
+    (value) => {
+      if (!Number.isFinite(Number(value))) return '—';
+      return formatLocalizedDateTime(Number(value), language, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    },
+    [language],
+  );
+  const renderTeamOpsBadges = useCallback(
+    (teamNumber, { emphasizeLoaded = false } = {}) => {
+      if (teamNumber == null) return null;
+      const ops = deriveTeamOpsFromNexusSnapshot(nexusSnapshot, teamNumber);
+      if (!ops) return null;
+      return (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {emphasizeLoaded ? <span className="badge badge-green">Loaded Team Ops</span> : null}
+          {ops.pitAddress ? <span className="badge">Pit {ops.pitAddress}</span> : null}
+          {ops.inspectionStatus ? (
+            <span className="badge">Inspection {ops.inspectionStatus}</span>
+          ) : null}
+          {ops.queueState ? <span className="badge">{ops.queueState}</span> : null}
+          {ops.bumperColor ? <span className="badge">Bumper {ops.bumperColor}</span> : null}
+          {ops.partsRequestCount ? (
+            <span className="badge">Parts {ops.partsRequestCount}</span>
+          ) : null}
+        </div>
+      );
+    },
+    [nexusSnapshot],
   );
   const webhookContextFields = useCallback(
     (extraFields = []) =>
@@ -814,156 +902,60 @@ export default function HomePage() {
     },
     [settings.webhook, webhookContextFields],
   );
-  function setTab(nextTab) {
-    if (['NOW', 'SCHEDULE', 'MATCH'].includes(nextTab)) {
-      setMajorTab('CURRENT');
-      setCurrentSubTab(nextTab);
-      return;
-    }
-    if (
-      [
-        'STRATEGY',
-        'GAME MANUAL',
-        'DISTRICT',
-        'COMPARE',
-        'TEAM_PROFILE',
-        'RANKINGS',
-        'PLAYOFFS',
-        'EVENT',
-        'DATA',
-      ].includes(nextTab)
-    ) {
-      if (majorTab === 'HISTORICAL') {
-        setMajorTab('HISTORICAL');
-        setHistoricalSubTab(nextTab);
-      } else {
+  const setTab = useCallback(
+    (nextTab) => {
+      if (['NOW', 'SCHEDULE', 'MATCH'].includes(nextTab)) {
         setMajorTab('CURRENT');
         setCurrentSubTab(nextTab);
-      }
-      return;
-    }
-    if (nextTab === 'PRE_EVENT') {
-      setMajorTab('HISTORICAL');
-      setHistoricalSubTab('PRE_EVENT');
-      return;
-    }
-    if (
-      ['PREDICT', 'ALLIANCE', 'PLAYOFF_LAB', 'IMPACT', 'PICK_LIST', 'LIVE_ALLIANCE'].includes(
-        nextTab,
-      )
-    ) {
-      setMajorTab('PREDICT');
-      setPredictSubTab(nextTab);
-      return;
-    }
-    if (nextTab === 'SETTINGS') {
-      setMajorTab('SETTINGS');
-      return;
-    }
-    if (nextTab === 'DATA') {
-      setMajorTab('CURRENT');
-      setCurrentSubTab('DATA');
-    }
-  }
-  useEffect(() => {
-    function handleGlobalShortcut(event) {
-      if (!event.altKey || event.ctrlKey || event.metaKey) return;
-      if (isTypingTarget(event.target)) return;
-
-      const key = event.key.toLowerCase();
-
-      if (key === '1') {
-        event.preventDefault();
-        setMajorTab('CURRENT');
         return;
       }
-      if (key === '2') {
-        event.preventDefault();
+      if (
+        [
+          'STRATEGY',
+          'GAME MANUAL',
+          'DISTRICT',
+          'COMPARE',
+          'TEAM_PROFILE',
+          'RANKINGS',
+          'PLAYOFFS',
+          'EVENT',
+          'DATA',
+        ].includes(nextTab)
+      ) {
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab(nextTab);
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab(nextTab);
+        }
+        return;
+      }
+      if (nextTab === 'PRE_EVENT') {
         setMajorTab('HISTORICAL');
+        setHistoricalSubTab('PRE_EVENT');
         return;
       }
-      if (key === '3') {
-        event.preventDefault();
+      if (
+        ['PREDICT', 'ALLIANCE', 'PLAYOFF_LAB', 'IMPACT', 'PICK_LIST', 'LIVE_ALLIANCE'].includes(
+          nextTab,
+        )
+      ) {
         setMajorTab('PREDICT');
+        setPredictSubTab(nextTab);
         return;
       }
-      if (key === '4') {
-        event.preventDefault();
+      if (nextTab === 'SETTINGS') {
         setMajorTab('SETTINGS');
         return;
       }
-      if (key === 'n') {
-        event.preventDefault();
+      if (nextTab === 'DATA') {
         setMajorTab('CURRENT');
-        setCurrentSubTab('NOW');
-        return;
+        setCurrentSubTab('DATA');
       }
-      if (key === 's') {
-        event.preventDefault();
-        setMajorTab('CURRENT');
-        setCurrentSubTab('SCHEDULE');
-        return;
-      }
-      if (key === 'm') {
-        event.preventDefault();
-        setMajorTab('CURRENT');
-        setCurrentSubTab('MATCH');
-        return;
-      }
-      if (key === 't') {
-        event.preventDefault();
-        if (majorTab === 'HISTORICAL') {
-          setMajorTab('HISTORICAL');
-          setHistoricalSubTab('STRATEGY');
-        } else {
-          setMajorTab('CURRENT');
-          setCurrentSubTab('STRATEGY');
-        }
-        return;
-      }
-      if (key === 'r') {
-        event.preventDefault();
-        if (majorTab === 'HISTORICAL') {
-          setMajorTab('HISTORICAL');
-          setHistoricalSubTab('RANKINGS');
-        } else {
-          setMajorTab('CURRENT');
-          setCurrentSubTab('RANKINGS');
-        }
-        return;
-      }
-      if (key === 'e') {
-        event.preventDefault();
-        if (majorTab === 'HISTORICAL') {
-          setMajorTab('HISTORICAL');
-          setHistoricalSubTab('EVENT');
-        } else {
-          setMajorTab('CURRENT');
-          setCurrentSubTab('EVENT');
-        }
-        return;
-      }
-      if (key === 'd') {
-        event.preventDefault();
-        if (majorTab === 'HISTORICAL') {
-          setMajorTab('HISTORICAL');
-          setHistoricalSubTab('DATA');
-        } else {
-          setMajorTab('CURRENT');
-          setCurrentSubTab('DATA');
-        }
-        return;
-      }
-      if (key === 'p') {
-        event.preventDefault();
-        setMajorTab('PREDICT');
-        setPredictSubTab('PREDICT');
-      }
-    }
-
-    window.addEventListener('keydown', handleGlobalShortcut);
-    return () => window.removeEventListener('keydown', handleGlobalShortcut);
-  }, [majorTab]);
+    },
+    [majorTab],
+  );
   useEffect(() => {
     let cancelled = false;
 
@@ -1809,38 +1801,63 @@ export default function HomePage() {
     return { eventKey: loadedEventKey, matchKey };
   }, [loadedEventKey, selectedMatch?.key, livePointers.ourNextMatch?.key, sortedMatches]);
   const effectiveStrategyTarget = strategyTarget ?? strategyDefaultTarget;
-  function openStrategyTarget(nextTarget) {
-    if (majorTab === 'HISTORICAL') {
-      setHistoricalStrategyTarget(nextTarget);
-      setHistoricalSubTab('STRATEGY');
-      return;
-    }
-    setStrategyTarget(nextTarget);
-    if (nextTarget.eventKey === loadedEventKey) setSelectedMatchKey(nextTarget.matchKey);
-    setTab('STRATEGY');
-  }
-  function openStrategyForMatch(match, eventKey = loadedEventKey) {
-    if (!match?.key || !eventKey) return;
-    openStrategyTarget({ eventKey, matchKey: match.key });
-  }
-  function openTeamProfile(teamNumber) {
-    if (!teamNumber || !Number.isFinite(Number(teamNumber))) return;
-    const normalized = Math.floor(Number(teamNumber));
-    if (majorTab === 'HISTORICAL') {
-      setHistoricalTeamProfileForcedTeamNumber(normalized);
-      setHistoricalSubTab('TEAM_PROFILE');
-      return;
-    }
-    setSelectedTeamNumber(normalized);
-    setCurrentTeamProfileForcedTeamNumber(normalized);
-    setTab('TEAM_PROFILE');
-  }
-  function addTeamToCompare(teamNumber) {
-    if (!teamNumber || !Number.isFinite(Number(teamNumber))) return;
-    const normalized = Math.floor(Number(teamNumber));
-    const compareScope = majorTab === 'HISTORICAL' ? 'historical' : 'current';
-    if (compareScope === 'historical') {
-      setHistoricalSubTab('COMPARE');
+  const openStrategyTarget = useCallback(
+    (nextTarget) => {
+      if (majorTab === 'HISTORICAL') {
+        setHistoricalStrategyTarget(nextTarget);
+        setHistoricalSubTab('STRATEGY');
+        return;
+      }
+      setStrategyTarget(nextTarget);
+      if (nextTarget.eventKey === loadedEventKey) setSelectedMatchKey(nextTarget.matchKey);
+      setTab('STRATEGY');
+    },
+    [loadedEventKey, majorTab, setTab],
+  );
+  const openStrategyForMatch = useCallback(
+    (match, eventKey = loadedEventKey) => {
+      if (!match?.key || !eventKey) return;
+      openStrategyTarget({ eventKey, matchKey: match.key });
+    },
+    [loadedEventKey, openStrategyTarget],
+  );
+  const openTeamProfile = useCallback(
+    (teamNumber) => {
+      if (!teamNumber || !Number.isFinite(Number(teamNumber))) return;
+      const normalized = Math.floor(Number(teamNumber));
+      if (majorTab === 'HISTORICAL') {
+        setHistoricalTeamProfileForcedTeamNumber(normalized);
+        setHistoricalSubTab('TEAM_PROFILE');
+        return;
+      }
+      setSelectedTeamNumber(normalized);
+      setCurrentTeamProfileForcedTeamNumber(normalized);
+      setTab('TEAM_PROFILE');
+    },
+    [majorTab, setTab],
+  );
+  const addTeamToCompare = useCallback(
+    (teamNumber) => {
+      if (!teamNumber || !Number.isFinite(Number(teamNumber))) return;
+      const normalized = Math.floor(Number(teamNumber));
+      const compareScope = majorTab === 'HISTORICAL' ? 'historical' : 'current';
+      if (compareScope === 'historical') {
+        setHistoricalSubTab('COMPARE');
+        void addTeamToCompareDraftShared(
+          normalized,
+          loadedTeam ?? null,
+          compareScope,
+          activeWorkspaceKey,
+        )
+          .then(() => {
+            setHistoricalCompareSyncKey((prev) => prev + 1);
+          })
+          .catch((error) => {
+            setErrorText(error?.message ?? 'Failed to update shared compare draft.');
+          });
+        return;
+      }
+      setTab('COMPARE');
       void addTeamToCompareDraftShared(
         normalized,
         loadedTeam ?? null,
@@ -1848,27 +1865,14 @@ export default function HomePage() {
         activeWorkspaceKey,
       )
         .then(() => {
-          setHistoricalCompareSyncKey((prev) => prev + 1);
+          setCurrentCompareSyncKey((prev) => prev + 1);
         })
         .catch((error) => {
           setErrorText(error?.message ?? 'Failed to update shared compare draft.');
         });
-      return;
-    }
-    setTab('COMPARE');
-    void addTeamToCompareDraftShared(
-      normalized,
-      loadedTeam ?? null,
-      compareScope,
-      activeWorkspaceKey,
-    )
-      .then(() => {
-        setCurrentCompareSyncKey((prev) => prev + 1);
-      })
-      .catch((error) => {
-        setErrorText(error?.message ?? 'Failed to update shared compare draft.');
-      });
-  }
+    },
+    [activeWorkspaceKey, loadedTeam, majorTab, setTab],
+  );
   const compositeRankMap = useMemo(() => {
     const map = new Map();
     for (const row of eventTeamRows) map.set(row.teamKey, row.compositeRank);
@@ -1902,6 +1906,367 @@ export default function HomePage() {
         .slice(0, 12),
     [eventTeamRows],
   );
+  const closeCommandPalette = useCallback(() => {
+    setCommandPaletteOpen(false);
+    setCommandPaletteQuery('');
+    setCommandPaletteIndex(0);
+  }, []);
+  const openCommandPalette = useCallback((prefill = '') => {
+    setCommandPaletteOpen(true);
+    setCommandPaletteQuery(prefill);
+    setCommandPaletteIndex(0);
+  }, []);
+  const executeCommandPaletteAction = useCallback(
+    (action) => {
+      if (!action?.run) return;
+      closeCommandPalette();
+      action.run();
+    },
+    [closeCommandPalette],
+  );
+  const commandPaletteActions = useMemo(() => {
+    const actions = [];
+    const pushAction = (key, label, description, tokens, run) => {
+      actions.push({
+        key,
+        label,
+        description,
+        search: [label, description, ...(tokens ?? [])].filter(Boolean).join(' ').toLowerCase(),
+        run,
+      });
+    };
+
+    pushAction('tab_now', 'Open NOW', 'Jump to the live mission-control view.', ['current'], () =>
+      setTab('NOW'),
+    );
+    pushAction(
+      'tab_schedule',
+      'Open SCHEDULE',
+      'Review the active event schedule.',
+      ['matches', 'queue'],
+      () => setTab('SCHEDULE'),
+    );
+    pushAction('tab_match', 'Open MATCH', 'Jump to match detail.', ['selected match'], () =>
+      setTab('MATCH'),
+    );
+    pushAction(
+      'tab_strategy',
+      'Open STRATEGY',
+      'Open the strategy workspace for the currently relevant match.',
+      ['boards', 'plan'],
+      () => {
+        if (strategyDefaultTarget) {
+          openStrategyTarget(strategyDefaultTarget);
+          return;
+        }
+        setTab('STRATEGY');
+      },
+    );
+    pushAction(
+      'tab_team_profile',
+      'Open TEAM_PROFILE',
+      'Jump to team history and scouting context.',
+      ['team profile', 'history'],
+      () => {
+        if (loadedTeam != null) {
+          openTeamProfile(loadedTeam);
+          return;
+        }
+        setTab('TEAM_PROFILE');
+      },
+    );
+    pushAction('tab_compare', 'Open COMPARE', 'Jump to side-by-side team comparison.', [], () =>
+      setTab('COMPARE'),
+    );
+    pushAction('tab_event', 'Open EVENT', 'Open live ops, media, and validation.', [], () =>
+      setTab('EVENT'),
+    );
+    pushAction('tab_predict', 'Open PREDICT', 'Jump to prediction and scenario tools.', [], () =>
+      setTab('PREDICT'),
+    );
+    pushAction(
+      'tab_alliance',
+      'Open ALLIANCE',
+      'Jump to alliance-selection tools.',
+      ['pick list', 'captains'],
+      () => setTab('ALLIANCE'),
+    );
+    pushAction(
+      'tab_settings',
+      'Open SETTINGS',
+      'Review shortcuts, diagnostics, and desk configuration.',
+      ['diagnostics'],
+      () => setTab('SETTINGS'),
+    );
+
+    if (loadedTeam != null) {
+      pushAction(
+        `loaded_team_profile_${loadedTeam}`,
+        `TEAM_PROFILE: ${loadedTeam}`,
+        'Open the loaded team in TEAM_PROFILE.',
+        ['loaded team'],
+        () => openTeamProfile(loadedTeam),
+      );
+      pushAction(
+        `loaded_team_compare_${loadedTeam}`,
+        `COMPARE: ${loadedTeam}`,
+        'Add the loaded team to COMPARE.',
+        ['loaded team', 'compare'],
+        () => addTeamToCompare(loadedTeam),
+      );
+    }
+
+    if (selectedMatch) {
+      pushAction(
+        `selected_match_${selectedMatch.key}`,
+        `Selected Match: ${formatMatchLabel(selectedMatch)}`,
+        'Open the selected match detail.',
+        [selectedMatch.key, selectedMatch.comp_level],
+        () => {
+          setSelectedMatchKey(selectedMatch.key);
+          setTab('MATCH');
+        },
+      );
+      pushAction(
+        `selected_strategy_${selectedMatch.key}`,
+        `Strategy: ${formatMatchLabel(selectedMatch)}`,
+        'Open STRATEGY for the selected match.',
+        [selectedMatch.key, 'strategy'],
+        () => openStrategyForMatch(selectedMatch),
+      );
+    }
+
+    if (livePointers.ourNextMatch) {
+      pushAction(
+        `next_match_${livePointers.ourNextMatch.key}`,
+        `Next Match: ${formatMatchLabel(livePointers.ourNextMatch)}`,
+        'Open the next scheduled match detail.',
+        ['next match', livePointers.ourNextMatch.key],
+        () => {
+          setSelectedMatchKey(livePointers.ourNextMatch.key);
+          setTab('MATCH');
+        },
+      );
+      pushAction(
+        `next_strategy_${livePointers.ourNextMatch.key}`,
+        `Next Strategy: ${formatMatchLabel(livePointers.ourNextMatch)}`,
+        'Open STRATEGY for the next scheduled match.',
+        ['next match', 'strategy'],
+        () => openStrategyForMatch(livePointers.ourNextMatch),
+      );
+    }
+
+    for (const match of sortedMatches.slice(0, 8)) {
+      pushAction(
+        `match_${match.key}`,
+        `Match ${formatMatchLabel(match)}`,
+        'Open match detail from the current event.',
+        [match.key, match.comp_level, String(match.match_number ?? '')],
+        () => {
+          setSelectedMatchKey(match.key);
+          setTab('MATCH');
+        },
+      );
+      pushAction(
+        `match_strategy_${match.key}`,
+        `Strategy ${formatMatchLabel(match)}`,
+        'Open STRATEGY for this event match.',
+        [match.key, 'strategy'],
+        () => openStrategyForMatch(match),
+      );
+    }
+
+    for (const row of eventViewRows.slice(0, 12)) {
+      pushAction(
+        `team_${row.teamNumber}`,
+        `Team ${row.teamNumber} ${row.nickname}`,
+        'Open TEAM_PROFILE for this event team.',
+        [row.teamKey, row.record, String(row.rank ?? '')],
+        () => openTeamProfile(row.teamNumber),
+      );
+    }
+
+    return actions;
+  }, [
+    addTeamToCompare,
+    eventViewRows,
+    livePointers.ourNextMatch,
+    loadedTeam,
+    openStrategyForMatch,
+    openStrategyTarget,
+    openTeamProfile,
+    selectedMatch,
+    setTab,
+    sortedMatches,
+    strategyDefaultTarget,
+  ]);
+  const filteredCommandPaletteActions = useMemo(() => {
+    const query = commandPaletteQuery.trim().toLowerCase();
+    return commandPaletteActions
+      .filter((action) => !query || action.search.includes(query))
+      .slice(0, 18);
+  }, [commandPaletteActions, commandPaletteQuery]);
+  const activeCommandPaletteAction =
+    filteredCommandPaletteActions[
+      clamp(commandPaletteIndex, 0, Math.max(0, filteredCommandPaletteActions.length - 1))
+    ] ?? null;
+  useEffect(() => {
+    if (!commandPaletteOpen) return undefined;
+    const id = window.setTimeout(() => {
+      commandPaletteInputRef.current?.focus();
+      commandPaletteInputRef.current?.select?.();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [commandPaletteOpen]);
+  useEffect(() => {
+    setCommandPaletteIndex((prev) =>
+      clamp(prev, 0, Math.max(0, filteredCommandPaletteActions.length - 1)),
+    );
+  }, [filteredCommandPaletteActions.length]);
+  useEffect(() => {
+    function handleGlobalShortcut(event) {
+      const key = event.key.toLowerCase();
+
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key === 'k') {
+        event.preventDefault();
+        if (commandPaletteOpen) {
+          closeCommandPalette();
+        } else {
+          openCommandPalette();
+        }
+        return;
+      }
+
+      if (commandPaletteOpen) {
+        if (key === 'escape') {
+          event.preventDefault();
+          closeCommandPalette();
+          return;
+        }
+        if (key === 'arrowdown') {
+          event.preventDefault();
+          setCommandPaletteIndex((prev) =>
+            clamp(prev + 1, 0, Math.max(0, filteredCommandPaletteActions.length - 1)),
+          );
+          return;
+        }
+        if (key === 'arrowup') {
+          event.preventDefault();
+          setCommandPaletteIndex((prev) =>
+            clamp(prev - 1, 0, Math.max(0, filteredCommandPaletteActions.length - 1)),
+          );
+          return;
+        }
+        if (key === 'enter' && activeCommandPaletteAction) {
+          event.preventDefault();
+          executeCommandPaletteAction(activeCommandPaletteAction);
+          return;
+        }
+      }
+
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      if (isTypingTarget(event.target)) return;
+
+      if (key === '1') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        return;
+      }
+      if (key === '2') {
+        event.preventDefault();
+        setMajorTab('HISTORICAL');
+        return;
+      }
+      if (key === '3') {
+        event.preventDefault();
+        setMajorTab('PREDICT');
+        return;
+      }
+      if (key === '4') {
+        event.preventDefault();
+        setMajorTab('SETTINGS');
+        return;
+      }
+      if (key === 'n') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('NOW');
+        return;
+      }
+      if (key === 's') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('SCHEDULE');
+        return;
+      }
+      if (key === 'm') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('MATCH');
+        return;
+      }
+      if (key === 't') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('STRATEGY');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('STRATEGY');
+        }
+        return;
+      }
+      if (key === 'r') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('RANKINGS');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('RANKINGS');
+        }
+        return;
+      }
+      if (key === 'e') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('EVENT');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('EVENT');
+        }
+        return;
+      }
+      if (key === 'd') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('DATA');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('DATA');
+        }
+        return;
+      }
+      if (key === 'p') {
+        event.preventDefault();
+        setMajorTab('PREDICT');
+        setPredictSubTab('PREDICT');
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalShortcut);
+  }, [
+    activeCommandPaletteAction,
+    closeCommandPalette,
+    commandPaletteOpen,
+    executeCommandPaletteAction,
+    filteredCommandPaletteActions.length,
+    majorTab,
+    openCommandPalette,
+  ]);
   useEffect(() => {
     if (!loadedTeam) return;
     const nextQual = ourUpcomingMatches.find((m) => m.comp_level === 'qm');
@@ -2403,14 +2768,79 @@ export default function HomePage() {
       }
       return true;
     });
-    const sorter = {
-      composite: (r) => -Number(r.composite ?? -999),
-      epa: (r) => -Number(r.overallEpa ?? -999),
-      rank: (r) => Number(r.realRank ?? r.simRank ?? 9999),
-      opr: (r) => -Number(r.opr ?? -999),
-    }[allianceSortMode];
+    const sorter =
+      {
+        composite: (r) => -Number(r.composite ?? -999),
+        epa: (r) => -Number(r.overallEpa ?? -999),
+        rank: (r) => Number(r.realRank ?? r.simRank ?? 9999),
+        opr: (r) => -Number(r.opr ?? -999),
+      }[allianceSortMode] ?? ((r) => -Number(r.composite ?? -999));
     return [...rows].sort((a, b) => sorter(a) - sorter(b));
   }, [allianceRuntime, allianceCurrentCaptain, allianceSortMode]);
+  const allianceCandidateInsights = useMemo(
+    () =>
+      buildAllianceCandidateInsights({
+        availableRows: availableTeams,
+        captainSlots: allianceRuntime?.captainSlots ?? [],
+        currentCaptainKey: allianceCurrentCaptain?.captain ?? null,
+        eventRowMap,
+      }),
+    [allianceCurrentCaptain?.captain, allianceRuntime?.captainSlots, availableTeams, eventRowMap],
+  );
+  const allianceAvailableRows = useMemo(() => {
+    if (allianceSortMode === 'pickValue') {
+      return [...allianceCandidateInsights].sort((a, b) => b.pickValueScore - a.pickValueScore);
+    }
+    if (allianceSortMode === 'denialValue') {
+      return [...allianceCandidateInsights].sort((a, b) => b.denialValueScore - a.denialValueScore);
+    }
+    if (allianceSortMode === 'chemistry') {
+      return [...allianceCandidateInsights].sort((a, b) => b.chemistryScore - a.chemistryScore);
+    }
+    if (allianceSortMode === 'playoffReady') {
+      return [...allianceCandidateInsights].sort(
+        (a, b) => b.playoffReadyScore - a.playoffReadyScore,
+      );
+    }
+    if (allianceSortMode === 'ceiling') {
+      return [...allianceCandidateInsights].sort((a, b) => b.ceilingScore - a.ceilingScore);
+    }
+    if (allianceSortMode === 'stability') {
+      return [...allianceCandidateInsights].sort((a, b) => b.stabilityScore - a.stabilityScore);
+    }
+    const insightMap = new Map(allianceCandidateInsights.map((row) => [row.teamKey, row]));
+    return availableTeams.map((row) => insightMap.get(row.teamKey) ?? row);
+  }, [allianceCandidateInsights, allianceSortMode, availableTeams]);
+  const allianceRecommendationRows = useMemo(
+    () => [
+      {
+        label: 'Build Us',
+        key: 'pickValueScore',
+        row: topInsightRows(allianceCandidateInsights, 'pickValueScore')[0] ?? null,
+      },
+      {
+        label: 'Best Fit',
+        key: 'chemistryScore',
+        row: topInsightRows(allianceCandidateInsights, 'chemistryScore')[0] ?? null,
+      },
+      {
+        label: 'Deny Rival',
+        key: 'denialValueScore',
+        row: topInsightRows(allianceCandidateInsights, 'denialValueScore')[0] ?? null,
+      },
+      {
+        label: 'Playoff Ready',
+        key: 'playoffReadyScore',
+        row: topInsightRows(allianceCandidateInsights, 'playoffReadyScore')[0] ?? null,
+      },
+      {
+        label: 'Highest Ceiling',
+        key: 'ceilingScore',
+        row: topInsightRows(allianceCandidateInsights, 'ceilingScore')[0] ?? null,
+      },
+    ],
+    [allianceCandidateInsights],
+  );
   function reseedCaptainSlots(slots) {
     return slots.map((slot, idx) => ({ ...slot, seed: idx + 1 }));
   }
@@ -3082,6 +3512,55 @@ export default function HomePage() {
       .filter((r) => !used.has(r.teamKey))
       .filter((r) => !declined.has(r.teamKey));
   }, [liveAllianceRuntime]);
+  const liveAllianceCurrentCaptain = useMemo(
+    () =>
+      liveAllianceRuntime?.captainSlots?.[liveAllianceRuntime?.currentIndex ?? 0]?.captain ?? null,
+    [liveAllianceRuntime],
+  );
+  const liveAllianceCandidateInsights = useMemo(
+    () =>
+      buildAllianceCandidateInsights({
+        availableRows: liveAllianceAvailableTeams,
+        captainSlots: liveAllianceRuntime?.captainSlots ?? [],
+        currentCaptainKey: liveAllianceCurrentCaptain,
+        eventRowMap,
+      }),
+    [
+      eventRowMap,
+      liveAllianceAvailableTeams,
+      liveAllianceCurrentCaptain,
+      liveAllianceRuntime?.captainSlots,
+    ],
+  );
+  const pickDeskRuntime = useMemo(() => {
+    if (liveAllianceRuntime?.captainSlots?.length) return liveAllianceRuntime;
+    if (allianceRuntime?.captainSlots?.length) return allianceRuntime;
+    return freshAllianceStateFromSource(
+      [...eventTeamRows].sort((a, b) => Number(a.rank ?? 9999) - Number(b.rank ?? 9999)),
+    );
+  }, [allianceRuntime, eventTeamRows, liveAllianceRuntime]);
+  const pickDeskTakenTeams = useMemo(() => {
+    const taken = new Set();
+    (pickDeskRuntime?.captainSlots ?? []).forEach((slot) =>
+      [slot.captain, ...(slot.picks ?? [])].forEach((teamKey) => taken.add(teamKey)),
+    );
+    return taken;
+  }, [pickDeskRuntime]);
+  const pickListCandidateInsights = useMemo(
+    () =>
+      buildAllianceCandidateInsights({
+        availableRows: eventTeamRows.filter((row) => !pickDeskTakenTeams.has(row.teamKey)),
+        captainSlots: pickDeskRuntime?.captainSlots ?? [],
+        currentCaptainKey:
+          pickDeskRuntime?.captainSlots?.[pickDeskRuntime?.currentIndex ?? 0]?.captain ?? null,
+        eventRowMap,
+      }),
+    [eventRowMap, eventTeamRows, pickDeskRuntime, pickDeskTakenTeams],
+  );
+  const pickListInsightMap = useMemo(
+    () => new Map(pickListCandidateInsights.map((row) => [row.teamKey, row])),
+    [pickListCandidateInsights],
+  );
   function handleLiveAllianceAccept() {
     if (!liveAllianceRuntime || !liveAlliancePickTarget) return;
     let next = structuredClone(liveAllianceRuntime);
@@ -3260,6 +3739,9 @@ export default function HomePage() {
               <span className="badge dashboard-inline-chip">
                 {t('field.updated', 'Updated')} {lastUpdateText}
               </span>
+              {snapshot?.tba?.event ? (
+                <span className="badge badge-green dashboard-inline-chip">TBA Working</span>
+              ) : null}
               {sourceValidation ? (
                 <span
                   className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
@@ -3302,6 +3784,107 @@ export default function HomePage() {
   }
   function renderTabs() {
     return renderProductBar();
+  }
+  function renderCommandPalette() {
+    if (!commandPaletteOpen) return null;
+    return (
+      <div
+        role="presentation"
+        onClick={() => closeCommandPalette()}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(2, 6, 23, 0.72)',
+          backdropFilter: 'blur(10px)',
+          zIndex: 90,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'flex-start',
+          padding: '10vh 16px 16px',
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Command Palette"
+          className="panel"
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            width: 'min(720px, 100%)',
+            padding: 16,
+            border: '1px solid rgba(148, 163, 184, 0.24)',
+            boxShadow: '0 28px 80px rgba(15, 23, 42, 0.55)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 900 }}>Command Palette</div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                Jump to tabs, matches, strategy targets, and team profiles from one place.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <span className="badge">Ctrl/Cmd+K</span>
+              <span className="badge">Arrow Keys + Enter</span>
+              <span className="badge">Esc to close</span>
+            </div>
+          </div>
+          <input
+            ref={commandPaletteInputRef}
+            className="input"
+            value={commandPaletteQuery}
+            onChange={(event) => {
+              setCommandPaletteQuery(event.target.value);
+              setCommandPaletteIndex(0);
+            }}
+            placeholder="Jump to tab, team, match, or strategy target..."
+            aria-label="Command Palette Search"
+            style={{ width: '100%', marginBottom: 12 }}
+          />
+          <div className="stack-8" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+            {filteredCommandPaletteActions.map((action, index) => {
+              const active = index === commandPaletteIndex;
+              return (
+                <button
+                  key={action.key}
+                  type="button"
+                  className="panel-2"
+                  onMouseEnter={() => setCommandPaletteIndex(index)}
+                  onClick={() => executeCommandPaletteAction(action)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: 12,
+                    borderColor: active ? '#4bb3fd' : 'rgba(148, 163, 184, 0.18)',
+                    background: active ? 'rgba(75, 179, 253, 0.12)' : undefined,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ fontWeight: 900 }}>{action.label}</div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    {action.description}
+                  </div>
+                </button>
+              );
+            })}
+            {!filteredCommandPaletteActions.length ? (
+              <div className="muted" style={{ padding: 12 }}>
+                No quick-jump results match the current search.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
   }
   function renderTeamIntelCard(teamKey, label) {
     const row = eventRowMap.get(teamKey);
@@ -3352,6 +3935,9 @@ export default function HomePage() {
           Played SOS {fmt(row.playedSos, 1)} | Rem SOS {fmt(row.remainingSos, 1)} | Total SOS{' '}
           {fmt(row.totalSos, 1)}
         </div>
+        {renderTeamOpsBadges(row.teamNumber, {
+          emphasizeLoaded: loadedTeam != null && Number(row.teamNumber) === Number(loadedTeam),
+        })}
         <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
           <button className="button" onClick={() => openTeamProfile(row.teamNumber)}>
             TEAM_PROFILE
@@ -3515,6 +4101,89 @@ export default function HomePage() {
                 </div>
               </div>
             </div>
+            {loadedTeamOps || lastLiveSignal || sourceValidation ? (
+              <div className="grid-3" style={{ marginTop: 16 }}>
+                {loadedTeamOps ? (
+                  <>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        Loaded Team Ops
+                      </div>
+                      <div style={{ fontWeight: 900, marginTop: 6 }}>
+                        {loadedTeamOps.queueState ?? 'No active Nexus team queue context'}
+                      </div>
+                      <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                        Pit {loadedTeamOps.pitAddress ?? 'â€”'} | Inspection{' '}
+                        {loadedTeamOps.inspectionStatus ?? 'â€”'}
+                      </div>
+                    </div>
+                    <div className="panel-2" style={{ padding: 12 }}>
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        Bumper + Timing
+                      </div>
+                      <div style={{ fontWeight: 900, marginTop: 6 }}>
+                        {loadedTeamOps.bumperColor ?? 'â€”'} | Away{' '}
+                        {loadedTeamOps.queueMatchesAway ?? 'â€”'}
+                      </div>
+                      <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                        Queue {formatOpsTime(loadedTeamOps.estimatedQueueTimeMs)}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+                {lastLiveSignal ? (
+                  <div className="panel-2" style={{ padding: 12 }}>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {['alliance_selection', 'broadcast'].includes(
+                        String(lastLiveSignal.signalType ?? ''),
+                      )
+                        ? 'Live Desk Prompt'
+                        : 'Last Live Signal'}
+                    </div>
+                    <div style={{ fontWeight: 900, marginTop: 6 }}>{lastLiveSignal.title}</div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      {lastLiveSignal.body || lastLiveSignal.signalType}
+                    </div>
+                  </div>
+                ) : sourceValidation ? (
+                  <div className="panel-2" style={{ padding: 12 }}>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      Source Trust
+                    </div>
+                    <div style={{ fontWeight: 900, marginTop: 6 }}>
+                      {validationCounts.mismatch} mismatch / {validationCounts.missing} missing
+                    </div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Stale{' '}
+                      {sourceValidation.staleSeconds != null
+                        ? `${sourceValidation.staleSeconds}s`
+                        : 'â€”'}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {featuredLiveSignal ? (
+              <div
+                className="panel-2"
+                style={{
+                  padding: 14,
+                  marginTop: 16,
+                  borderColor:
+                    featuredLiveSignal.signalType === 'alliance_selection' ? '#f3be3b' : '#4bb3fd',
+                }}
+              >
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Live Desk Prompt
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6 }}>
+                  {featuredLiveSignal.title}
+                </div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {featuredLiveSignal.body || featuredLiveSignal.signalType}
+                </div>
+              </div>
+            ) : null}
             <div style={{ marginTop: 16 }}>
               <div style={{ fontWeight: 900, marginBottom: 8 }}>Next Match — Team Intel</div>
               <div className="stack-8">
@@ -5164,6 +5833,23 @@ export default function HomePage() {
                     </div>
                   </div>
                 </div>
+                {loadedTeamOps ? (
+                  <div className="panel-2" style={{ padding: 12 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Loaded Team Ops</div>
+                    <div style={{ fontWeight: 900 }}>
+                      {loadedTeamOps.queueState ?? 'No loaded-team queue context'}
+                    </div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Pit {loadedTeamOps.pitAddress ?? 'â€”'} | Inspection{' '}
+                      {loadedTeamOps.inspectionStatus ?? 'â€”'} | Bumper{' '}
+                      {loadedTeamOps.bumperColor ?? 'â€”'}
+                    </div>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Queue {formatOpsTime(loadedTeamOps.estimatedQueueTimeMs)} | On Deck{' '}
+                      {formatOpsTime(loadedTeamOps.estimatedOnDeckTimeMs)}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="panel-2" style={{ padding: 12 }}>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>Recent Signals</div>
                   <div className="stack-8" style={{ maxHeight: 280, overflow: 'auto' }}>
@@ -5201,11 +5887,90 @@ export default function HomePage() {
                     >
                       Open Pit Map
                     </a>
+                    <span className="badge">
+                      Pits {sourceStatusLabel(nexusSnapshot?.pitsStatus ?? 'unsupported')}
+                    </span>
+                    <span className="badge">
+                      Inspection{' '}
+                      {sourceStatusLabel(nexusSnapshot?.inspectionStatus ?? 'unsupported')}
+                    </span>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Pit map {sourceStatusLabel(nexusSnapshot?.pitMapStatus ?? 'unsupported')}.
+                    Optional Nexus map data is not available for this event.
+                  </div>
+                )}
               </div>
             </div>
           </div>
+          {pitAddressRows.length || inspectionRows.length ? (
+            <div className="grid-2" style={{ marginTop: 12 }}>
+              <div className="panel" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 10 }}>Pit Addresses</div>
+                {pitAddressRows.length ? (
+                  <div style={{ overflow: 'auto', maxHeight: 320 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left' }}>
+                          <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Team</th>
+                          <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Pit</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pitAddressRows.map((row) => (
+                          <tr key={`pit-${row.teamNumber}`}>
+                            <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                              {row.teamNumber} {row.teamNumber === loadedTeam ? '(Loaded)' : ''}
+                            </td>
+                            <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                              {row.pitAddress}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="muted">
+                    Pit addresses {sourceStatusLabel(nexusSnapshot?.pitsStatus ?? 'unsupported')}.
+                  </div>
+                )}
+              </div>
+              <div className="panel" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 10 }}>Inspection Board</div>
+                {inspectionRows.length ? (
+                  <div style={{ overflow: 'auto', maxHeight: 320 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left' }}>
+                          <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Team</th>
+                          <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inspectionRows.map((row) => (
+                          <tr key={`inspection-${row.teamNumber}`}>
+                            <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                              {row.teamNumber} {row.teamNumber === loadedTeam ? '(Loaded)' : ''}
+                            </td>
+                            <td style={{ padding: 8, borderBottom: '1px solid #1a2333' }}>
+                              {row.status}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="muted">
+                    Inspection data{' '}
+                    {sourceStatusLabel(nexusSnapshot?.inspectionStatus ?? 'unsupported')}.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
         </DisclosureSection>
         <DisclosureSection
           storageKey="ui.current.event.validation"
@@ -5241,7 +6006,19 @@ export default function HomePage() {
                 >
                   Nexus {nexusSnapshot ? sourceStatusLabel(nexusSnapshot.status) : 'Disabled'}
                 </span>
+                <span className="badge">
+                  Official{' '}
+                  {sourceValidation?.officialAvailability
+                    ? sourceValidation.officialAvailability
+                    : 'unavailable'}
+                </span>
                 <span className="badge">Official rankings {officialRankingsCount}</span>
+                <span className="badge">
+                  Official matches {sourceValidation?.officialCounts?.matches ?? 0}
+                </span>
+                <span className="badge">
+                  Official awards {sourceValidation?.officialCounts?.awards ?? 0}
+                </span>
                 <span className="badge">
                   Stale{' '}
                   {sourceValidation?.staleSeconds != null
@@ -6164,20 +6941,30 @@ export default function HomePage() {
         picks: slot.picks.length,
       };
     });
-    const allianceAvailabilityRows = availableTeams.slice(0, 24).map((row) => ({
+    const allianceAvailabilityRows = allianceAvailableRows.slice(0, 24).map((row) => ({
       label: `${row.teamNumber ?? teamNumberFromKey(row.teamKey) ?? row.teamKey}`,
       rank: row.realRank ?? row.simRank ?? null,
       epa: row.overallEpa ?? null,
       opr: row.opr ?? null,
       comp: row.composite ?? null,
       sos: row.totalSos ?? null,
+      pick: row.pickValueScore ?? null,
+      deny: row.denialValueScore ?? null,
+      fit: row.chemistryScore ?? null,
+      ready: row.playoffReadyScore ?? null,
+      ceiling: row.ceilingScore ?? null,
+      stable: row.stabilityScore ?? null,
     }));
-    const allianceStrengthVsRankRows = availableTeams.slice(0, 24).map((row) => ({
+    const allianceStrengthVsRankRows = allianceAvailableRows.slice(0, 24).map((row) => ({
       label: `${row.teamNumber ?? teamNumberFromKey(row.teamKey) ?? row.teamKey}`,
       rank: row.realRank ?? row.simRank ?? null,
       epa: row.overallEpa ?? null,
       opr: row.opr ?? null,
       comp: row.composite ?? null,
+      pick: row.pickValueScore ?? null,
+      fit: row.chemistryScore ?? null,
+      ready: row.playoffReadyScore ?? null,
+      ceiling: row.ceilingScore ?? null,
     }));
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
@@ -6270,6 +7057,12 @@ export default function HomePage() {
               <option value="epa">Sort: EPA</option>
               <option value="opr">Sort: OPR</option>
               <option value="rank">Sort: Real Rank</option>
+              <option value="pickValue">Sort: Pick Value</option>
+              <option value="chemistry">Sort: Chemistry</option>
+              <option value="denialValue">Sort: Denial Value</option>
+              <option value="playoffReady">Sort: Playoff Ready</option>
+              <option value="ceiling">Sort: Ceiling</option>
+              <option value="stability">Sort: Stability</option>
             </select>
             <button className="button" onClick={saveAllianceScenario}>
               Save Alliance Scenario
@@ -6318,10 +7111,12 @@ export default function HomePage() {
                   style={{ width: '100%' }}
                 >
                   <option value="">Choose invite target</option>
-                  {availableTeams.map((row) => (
+                  {allianceAvailableRows.map((row) => (
                     <option key={row.teamKey} value={row.teamKey}>
                       {row.teamKey} | Real Rank {row.realRank ?? '—'} | EPA {fmt(row.overallEpa, 1)}{' '}
-                      | OPR {fmt(row.opr, 1)} | Comp {fmt(row.composite, 1)}
+                      | Pick {fmt(row.pickValueScore, 0)} | Fit {fmt(row.chemistryScore, 0)} | Deny{' '}
+                      {fmt(row.denialValueScore, 0)} | Ready {fmt(row.playoffReadyScore, 0)} |
+                      Ceiling {fmt(row.ceilingScore, 0)}
                     </option>
                   ))}
                 </select>
@@ -6356,8 +7151,39 @@ export default function HomePage() {
                 </button>
               </div>
             </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 10,
+                marginBottom: 10,
+              }}
+            >
+              {allianceRecommendationRows.map((item) => (
+                <div key={item.label} className="panel-2" style={{ padding: 10 }}>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontWeight: 900, marginTop: 6 }}>
+                    {item.row?.teamNumber ?? teamNumberFromKey(item.row?.teamKey ?? '') ?? '—'}{' '}
+                    {item.row?.nickname ?? item.row?.teamKey ?? ''}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    {item.key === 'pickValueScore'
+                      ? `Pick ${fmt(item.row?.pickValueScore, 0)} | Ready ${fmt(item.row?.playoffReadyScore, 0)}`
+                      : item.key === 'chemistryScore'
+                        ? `Fit ${fmt(item.row?.chemistryScore, 0)} | Weakness ${item.row?.weakestArea ?? '—'}`
+                        : item.key === 'denialValueScore'
+                          ? `Deny ${fmt(item.row?.denialValueScore, 0)} | Rival ${item.row?.rivalCaptain ?? '—'}`
+                          : item.key === 'playoffReadyScore'
+                            ? `Ready ${fmt(item.row?.playoffReadyScore, 0)} | Stable ${fmt(item.row?.stabilityScore, 0)}`
+                            : `Ceiling ${fmt(item.row?.ceilingScore, 0)} | ${item.row?.bestUseCase ?? '—'}`}
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="stack-8" style={{ maxHeight: 400, overflow: 'auto' }}>
-              {availableTeams.map((row) => (
+              {allianceAvailableRows.map((row) => (
                 <div key={row.teamKey} className="panel-2" style={{ padding: 10 }}>
                   <div
                     style={{
@@ -6372,6 +7198,15 @@ export default function HomePage() {
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                     EPA {fmt(row.overallEpa, 1)} | OPR {fmt(row.opr, 1)} | Composite{' '}
                     {fmt(row.composite, 1)} | SOS {fmt(row.totalSos, 1)}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Pick {fmt(row.pickValueScore, 0)} | Fit {fmt(row.chemistryScore, 0)} | Deny{' '}
+                    {fmt(row.denialValueScore, 0)} | Ready {fmt(row.playoffReadyScore, 0)} | Ceiling{' '}
+                    {fmt(row.ceilingScore, 0)} | Stable {fmt(row.stabilityScore, 0)}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    {row.recommendation} | {row.bestUseCase} | {row.recommendationReason}
+                    {row.rivalCaptain ? ` vs ${row.rivalCaptain}` : ''}
                   </div>
                 </div>
               ))}
@@ -6418,13 +7253,14 @@ export default function HomePage() {
           />
           <AnalyticsChartBlock
             title="Alliance Availability Pool"
-            description="Available-team board for current pick context."
+            description="Available-team board with public-data pick, fit, playoff-readiness, and denial heuristics."
             data={allianceAvailabilityRows}
             chartFamily="bar"
             series={[
-              { key: 'epa', label: 'EPA', color: '#4bb3fd' },
-              { key: 'comp', label: 'Composite', color: '#2dd4bf' },
-              { key: 'sos', label: 'SOS', color: '#c084fc' },
+              { key: 'pick', label: 'Pick', color: '#4bb3fd' },
+              { key: 'fit', label: 'Fit', color: '#2dd4bf' },
+              { key: 'ready', label: 'Ready', color: '#c084fc' },
+              { key: 'deny', label: 'Deny', color: '#f97316' },
             ]}
             valueFormatter={(value) => fmt(value, 1)}
           />
@@ -6432,14 +7268,15 @@ export default function HomePage() {
         <div className="grid-2">
           <AnalyticsChartBlock
             title="Alliance Availability: Rank vs Strength"
-            description="Live captain board plus how far the current pool has fallen."
+            description="Live captain board plus how public-data recommendation scores line up with seed order."
             data={allianceStrengthVsRankRows}
             chartFamily="line"
             series={[
               { key: 'rank', label: 'Rank', color: '#f3be3b' },
               { key: 'epa', label: 'EPA', color: '#4bb3fd' },
-              { key: 'opr', label: 'OPR', color: '#ff6b6b' },
-              { key: 'comp', label: 'Composite', color: '#2dd4bf' },
+              { key: 'pick', label: 'Pick', color: '#ff6b6b' },
+              { key: 'ready', label: 'Ready', color: '#2dd4bf' },
+              { key: 'ceiling', label: 'Ceiling', color: '#c084fc' },
             ]}
             valueFormatter={(value) => fmt(value, 1)}
           />
@@ -6882,16 +7719,37 @@ export default function HomePage() {
           };
         })
       : [];
-    const availablePickRows = sortedOptions
-      .filter((row) => !taken.has(row.teamKey))
-      .slice(0, 24)
-      .map((row) => ({
-        label: `${row.teamNumber}`,
-        epa: row.overallEpa ?? null,
-        opr: row.opr ?? null,
-        comp: row.composite ?? null,
-        sos: row.totalSos ?? null,
-      }));
+    const availablePickRows = pickListCandidateInsights.slice(0, 24).map((row) => ({
+      label: `${row.teamNumber}`,
+      pick: row.pickValueScore ?? null,
+      deny: row.denialValueScore ?? null,
+      fit: row.chemistryScore ?? null,
+      ready: row.playoffReadyScore ?? null,
+      ceiling: row.ceilingScore ?? null,
+      epa: row.overallEpa ?? null,
+    }));
+    const pickListRecommendations = [
+      {
+        label: 'Best build-us target',
+        row: topInsightRows(pickListCandidateInsights, 'pickValueScore')[0] ?? null,
+      },
+      {
+        label: 'Best chemistry target',
+        row: topInsightRows(pickListCandidateInsights, 'chemistryScore')[0] ?? null,
+      },
+      {
+        label: 'Best denial target',
+        row: topInsightRows(pickListCandidateInsights, 'denialValueScore')[0] ?? null,
+      },
+      {
+        label: 'Safest playoff target',
+        row: topInsightRows(pickListCandidateInsights, 'playoffReadyScore')[0] ?? null,
+      },
+      {
+        label: 'Highest ceiling target',
+        row: topInsightRows(pickListCandidateInsights, 'ceilingScore')[0] ?? null,
+      },
+    ];
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
         <div className="panel" style={{ padding: 16 }}>
@@ -6940,7 +7798,10 @@ export default function HomePage() {
                   {sortedOptions.map((r) => (
                     <option key={r.teamKey} value={r.teamKey}>
                       {r.teamNumber} {r.nickname} | Comp {fmt(r.composite, 1)} | EPA{' '}
-                      {fmt(r.overallEpa, 1)}
+                      {fmt(r.overallEpa, 1)} | Pick{' '}
+                      {fmt(pickListInsightMap.get(r.teamKey)?.pickValueScore, 0)} | Ready{' '}
+                      {fmt(pickListInsightMap.get(r.teamKey)?.playoffReadyScore, 0)} | Ceiling{' '}
+                      {fmt(pickListInsightMap.get(r.teamKey)?.ceilingScore, 0)}
                     </option>
                   ))}
                 </select>
@@ -7000,6 +7861,17 @@ export default function HomePage() {
                           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                             {entry.comment || '—'} {entry.tag ? `| ${entry.tag}` : ''}
                           </div>
+                          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                            Pick {fmt(pickListInsightMap.get(entry.teamKey)?.pickValueScore, 0)} |
+                            Fit {fmt(pickListInsightMap.get(entry.teamKey)?.chemistryScore, 0)} |
+                            Deny {fmt(pickListInsightMap.get(entry.teamKey)?.denialValueScore, 0)} |
+                            Ready {fmt(pickListInsightMap.get(entry.teamKey)?.playoffReadyScore, 0)}{' '}
+                            | Ceiling {fmt(pickListInsightMap.get(entry.teamKey)?.ceilingScore, 0)}
+                          </div>
+                          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                            {pickListInsightMap.get(entry.teamKey)?.bestUseCase ?? '—'} |{' '}
+                            {pickListInsightMap.get(entry.teamKey)?.recommendationReason ?? '—'}
+                          </div>
                           <button
                             className="button"
                             style={{ marginTop: 8 }}
@@ -7023,6 +7895,28 @@ export default function HomePage() {
             </div>
           </>
         ) : null}
+        <div className="grid-3">
+          {pickListRecommendations.map((item) => (
+            <div key={item.label} className="panel" style={{ padding: 16 }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {item.label}
+              </div>
+              <div style={{ fontWeight: 900, marginTop: 6 }}>
+                {item.row?.teamNumber ?? '—'} {item.row?.nickname ?? item.row?.teamKey ?? ''}
+              </div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                {item.label === 'Safest playoff target'
+                  ? `Ready ${fmt(item.row?.playoffReadyScore, 0)} | Stable ${fmt(item.row?.stabilityScore, 0)}`
+                  : item.label === 'Highest ceiling target'
+                    ? `Ceiling ${fmt(item.row?.ceilingScore, 0)} | Pick ${fmt(item.row?.pickValueScore, 0)}`
+                    : `Pick ${fmt(item.row?.pickValueScore, 0)} | Fit ${fmt(item.row?.chemistryScore, 0)} | Deny ${fmt(item.row?.denialValueScore, 0)}`}
+              </div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                {item.row?.bestUseCase ?? '—'} | {item.row?.recommendationReason ?? '—'}
+              </div>
+            </div>
+          ))}
+        </div>
         <div className="grid-2">
           <div className="panel" style={{ padding: 16 }}>
             <div
@@ -7354,14 +8248,14 @@ export default function HomePage() {
           />
           <AnalyticsChartBlock
             title="Available Pick Targets"
-            description="Current-event scouting strength for the untaken pool."
+            description="Public-data pick heuristics for the untaken pool, including playoff readiness and ceiling."
             data={availablePickRows}
             chartFamily="bar"
             series={[
-              { key: 'epa', label: 'EPA', color: '#4bb3fd' },
-              { key: 'opr', label: 'OPR', color: '#ff6b6b' },
-              { key: 'comp', label: 'Composite', color: '#f3be3b' },
-              { key: 'sos', label: 'SOS', color: '#c084fc' },
+              { key: 'pick', label: 'Pick', color: '#4bb3fd' },
+              { key: 'fit', label: 'Fit', color: '#2dd4bf' },
+              { key: 'ready', label: 'Ready', color: '#c084fc' },
+              { key: 'ceiling', label: 'Ceiling', color: '#f97316' },
             ]}
             valueFormatter={(value) => fmt(value, 1)}
           />
@@ -7385,9 +8279,15 @@ export default function HomePage() {
         picks: slot.picks.length,
       };
     });
-    const liveAvailabilityRows = liveAllianceAvailableTeams.slice(0, 24).map((row) => ({
+    const liveAvailabilityRows = liveAllianceCandidateInsights.slice(0, 24).map((row) => ({
       label: `${row.teamNumber ?? teamNumberFromKey(row.teamKey) ?? row.teamKey}`,
       rank: row.realRank ?? row.simRank ?? null,
+      pick: row.pickValueScore ?? null,
+      fit: row.chemistryScore ?? null,
+      deny: row.denialValueScore ?? null,
+      ready: row.playoffReadyScore ?? null,
+      ceiling: row.ceilingScore ?? null,
+      stable: row.stabilityScore ?? null,
       epa: row.overallEpa ?? null,
       comp: row.composite ?? null,
     }));
@@ -7397,6 +8297,28 @@ export default function HomePage() {
       epa: liveCaptainRows.find((row) => row.label === `A${slot.seed}`)?.epa ?? null,
       comp: liveCaptainRows.find((row) => row.label === `A${slot.seed}`)?.comp ?? null,
     }));
+    const liveRecommendations = [
+      {
+        label: 'Build Us',
+        row: topInsightRows(liveAllianceCandidateInsights, 'pickValueScore')[0] ?? null,
+      },
+      {
+        label: 'Best Fit',
+        row: topInsightRows(liveAllianceCandidateInsights, 'chemistryScore')[0] ?? null,
+      },
+      {
+        label: 'Deny Rival',
+        row: topInsightRows(liveAllianceCandidateInsights, 'denialValueScore')[0] ?? null,
+      },
+      {
+        label: 'Playoff Ready',
+        row: topInsightRows(liveAllianceCandidateInsights, 'playoffReadyScore')[0] ?? null,
+      },
+      {
+        label: 'Highest Ceiling',
+        row: topInsightRows(liveAllianceCandidateInsights, 'ceilingScore')[0] ?? null,
+      },
+    ];
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
         <div className="panel" style={{ padding: 16 }}>
@@ -7444,9 +8366,11 @@ export default function HomePage() {
                 onChange={(e) => setLiveAlliancePickTarget(e.target.value)}
               >
                 <option value="">Choose invite target</option>
-                {liveAllianceAvailableTeams.map((r) => (
+                {liveAllianceCandidateInsights.map((r) => (
                   <option key={r.teamKey} value={r.teamKey}>
-                    {r.teamKey} | Comp {fmt(r.composite, 1)} | EPA {fmt(r.overallEpa, 1)}
+                    {r.teamKey} | Pick {fmt(r.pickValueScore, 0)} | Fit {fmt(r.chemistryScore, 0)} |
+                    Deny {fmt(r.denialValueScore, 0)} | Ready {fmt(r.playoffReadyScore, 0)} |
+                    Ceiling {fmt(r.ceilingScore, 0)}
                   </option>
                 ))}
               </select>
@@ -7464,6 +8388,29 @@ export default function HomePage() {
               >
                 Decline
               </button>
+            </div>
+            <div className="grid-3" style={{ marginBottom: 10 }}>
+              {liveRecommendations.map((item) => (
+                <div key={item.label} className="panel-2" style={{ padding: 10 }}>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontWeight: 900, marginTop: 6 }}>
+                    {item.row?.teamNumber ?? teamNumberFromKey(item.row?.teamKey ?? '') ?? '—'}{' '}
+                    {item.row?.teamKey ?? ''}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    {item.label === 'Playoff Ready'
+                      ? `Ready ${fmt(item.row?.playoffReadyScore, 0)} | Stable ${fmt(item.row?.stabilityScore, 0)}`
+                      : item.label === 'Highest Ceiling'
+                        ? `Ceiling ${fmt(item.row?.ceilingScore, 0)} | Pick ${fmt(item.row?.pickValueScore, 0)}`
+                        : `Pick ${fmt(item.row?.pickValueScore, 0)} | Fit ${fmt(item.row?.chemistryScore, 0)} | Deny ${fmt(item.row?.denialValueScore, 0)}`}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    {item.row?.bestUseCase ?? '—'} | {item.row?.recommendationReason ?? '—'}
+                  </div>
+                </div>
+              ))}
             </div>
             <div className="stack-8">
               {(liveAllianceRuntime?.captainSlots ?? []).map((slot) => (
@@ -7523,12 +8470,14 @@ export default function HomePage() {
           />
           <AnalyticsChartBlock
             title="Live Available Teams"
-            description="Remaining invite targets by current-event strength."
+            description="Remaining invite targets by public-data pick heuristics, playoff readiness, and upside."
             data={liveAvailabilityRows}
             chartFamily="bar"
             series={[
-              { key: 'epa', label: 'EPA', color: '#4bb3fd' },
-              { key: 'comp', label: 'Composite', color: '#2dd4bf' },
+              { key: 'pick', label: 'Pick', color: '#4bb3fd' },
+              { key: 'fit', label: 'Fit', color: '#2dd4bf' },
+              { key: 'ready', label: 'Ready', color: '#c084fc' },
+              { key: 'ceiling', label: 'Ceiling', color: '#f97316' },
             ]}
             valueFormatter={(value) => fmt(value, 1)}
           />
@@ -7548,13 +8497,14 @@ export default function HomePage() {
           />
           <AnalyticsChartBlock
             title="Live Available Rank / Strength"
-            description="Remaining live pool by rank and current-event strength."
+            description="Remaining live pool by rank, current-event strength, and playoff-readiness signals."
             data={liveAvailabilityRows}
             chartFamily="line"
             series={[
               { key: 'rank', label: 'Rank', color: '#f3be3b' },
               { key: 'epa', label: 'EPA', color: '#4bb3fd' },
-              { key: 'comp', label: 'Composite', color: '#2dd4bf' },
+              { key: 'ready', label: 'Ready', color: '#2dd4bf' },
+              { key: 'ceiling', label: 'Ceiling', color: '#c084fc' },
             ]}
             valueFormatter={(value) => fmt(value, 1)}
           />
@@ -7881,6 +8831,7 @@ export default function HomePage() {
             : currentTeamProfileForcedTeamNumber
         }
         loadedEventKey={loadedEventKey}
+        nexusSnapshot={nexusSnapshot}
         onOpenStrategy={openStrategyTarget}
         onAddToCompare={addTeamToCompare}
         scope={scope}
@@ -7922,6 +8873,7 @@ export default function HomePage() {
       },
     ];
     const shortcutRows = [
+      { combo: 'Ctrl/Cmd+K', action: t('shortcut.quick_jump', 'Open Quick Jump') },
       { combo: 'Alt+1', action: t('shortcut.current', 'Jump to CURRENT') },
       { combo: 'Alt+2', action: t('shortcut.historical', 'Jump to HISTORICAL') },
       { combo: 'Alt+3', action: t('shortcut.predict', 'Jump to PREDICT') },
@@ -8303,6 +9255,7 @@ export default function HomePage() {
           <div className="panel" style={{ padding: 16 }}>
             <div style={{ fontWeight: 900, marginBottom: 10 }}>Live Integrations</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <span className="badge">{snapshot?.tba?.event ? 'TBA Working' : 'TBA Waiting'}</span>
               <span
                 className={`badge ${sourceValidation ? sourceStatusBadgeClass(sourceValidation.firstStatus) : ''}`}
               >
@@ -8358,6 +9311,20 @@ export default function HomePage() {
                   TBA Webhook Receiver
                 </div>
                 <div className="mono">/api/webhook/tba</div>
+                <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                  {lastLiveSignal
+                    ? `Last signal ${lastLiveSignal.signalType} at ${formatLocalizedDateTime(
+                        lastLiveSignal.createdAtMs,
+                        language,
+                        {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        },
+                      )}`
+                    : 'No live signal stored for this event yet.'}
+                </div>
               </div>
               <div className="panel-2" style={{ padding: 12 }}>
                 <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
@@ -8373,6 +9340,16 @@ export default function HomePage() {
                 </div>
                 <div style={{ fontWeight: 800 }}>
                   {nexusSnapshot?.queueText ?? 'No queue signal'}
+                </div>
+              </div>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                  Webhook Signal Store
+                </div>
+                <div style={{ fontWeight: 800 }}>
+                  {liveSignals.length
+                    ? `${liveSignals.length} stored for this event`
+                    : 'No stored signals yet'}
                 </div>
               </div>
               <div className="muted" style={{ fontSize: 12 }}>
@@ -8518,6 +9495,7 @@ export default function HomePage() {
           {renderTabs()}
           <div className="dashboard-main">
             {renderTopControls()}
+            {renderCommandPalette()}
             <div className="dashboard-content">
               <div className="dashboard-page">
                 <PageHeader

@@ -19,7 +19,7 @@ export async function GET(req: Request): Promise<NextResponse<AppSnapshot | { er
     const eventKey = parseRequiredEventKey(searchParams.get('eventKey') ?? '');
     const team = parsePositiveTeamNumber(searchParams.get('team') ?? '');
     const teamKey = `frc${team}`;
-    const eventContext = await loadEventContext(eventKey);
+    const eventContext = await loadEventContext(eventKey, team);
 
     const payload: AppSnapshot = {
       generatedAtMs: Date.now(),

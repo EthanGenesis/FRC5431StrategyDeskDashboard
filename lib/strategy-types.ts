@@ -5,6 +5,11 @@ import type {
   OfficialEventSnapshot,
   ValidationSnapshot,
 } from './types';
+import type {
+  StrategyContingencies,
+  StrategyRiskLevel,
+  StrategyRoleAssignments,
+} from './strategy-presets';
 
 export type StrategyStatus = 'draft' | 'final';
 
@@ -73,6 +78,10 @@ export type StrategyRecord = {
   };
   status: StrategyStatus;
   notes: string;
+  templateId?: string | null;
+  riskLevel?: StrategyRiskLevel | null;
+  roleAssignments?: StrategyRoleAssignments | null;
+  contingencies?: StrategyContingencies | null;
   autoBoard: StrategyBoardState;
   teleopBoard: StrategyBoardState;
   createdAtMs: number;

@@ -15,7 +15,7 @@ export async function GET(
 
   try {
     const eventKey = parseRequiredEventKey(searchParams.get('eventKey') ?? '');
-    const eventContext = await loadEventContext(eventKey);
+    const eventContext = await loadEventContext(eventKey, null);
 
     const payload: EventContextSnapshot = {
       generatedAtMs: Date.now(),

@@ -38,12 +38,6 @@ async function firstGetOptional<T>(requestPath: string): Promise<T | null> {
   }
 }
 
-function firstStatus(enabled: boolean, hasData: boolean, error: unknown = null): SourceStatus {
-  if (!enabled) return 'disabled';
-  if (hasData) return 'available';
-  return error ? 'error' : 'available';
-}
-
 export async function loadOfficialEventSnapshot(
   eventKey: string,
 ): Promise<OfficialEventSnapshot | null> {
@@ -84,14 +78,18 @@ export async function loadOfficialEventSnapshot(
     const normalizedAwards = Array.isArray(awards?.Awards)
       ? (awards.Awards as Record<string, unknown>[])
       : [];
-    const hasCoreData =
-      Boolean(event) ||
-      normalizedMatches.length > 0 ||
-      Boolean(rankings) ||
-      normalizedAwards.length > 0;
+    const eventLoaded = Boolean(event);
+    const rankingsLoaded = Boolean(rankings);
+    const matchesLoaded = Boolean(matches);
+    const awardsLoaded = Boolean(awards);
+    const loadedCount = [eventLoaded, rankingsLoaded, matchesLoaded, awardsLoaded].filter(
+      Boolean,
+    ).length;
+    const isFull = eventLoaded && rankingsLoaded && matchesLoaded;
+    const status: SourceStatus = loadedCount === 0 ? 'error' : isFull ? 'available' : 'partial';
 
     return {
-      status: firstStatus(enabled, hasCoreData),
+      status,
       event,
       matches: normalizedMatches,
       rankings: rankings ?? null,
