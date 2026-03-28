@@ -45,6 +45,10 @@ const _WORKSPACE_SETTINGS_KEYS = [
 type WorkspaceSettingsState = Pick<SettingsState, (typeof _WORKSPACE_SETTINGS_KEYS)[number]>;
 
 let browserClient: ReturnType<typeof createSupabaseBrowserClient> | null = null;
+const fallbackWorkspaceSettings = new Map<string, WorkspaceSettingsState>();
+const fallbackCompareDrafts = new Map<string, CompareDraft>();
+const fallbackNamedArtifacts = new Map<string, Map<string, NamedArtifact[]>>();
+const fallbackStrategyRecords = new Map<string, StrategyRecord>();
 
 function getBrowserClient() {
   if (!isSupabaseConfigured()) return null;
@@ -145,6 +149,15 @@ function requireWorkspaceKey(workspaceKey: string | null | undefined): string {
 
 function storageIdForWorkspace(workspaceKey: string, id: string): string {
   return `${workspaceKey}::${id}`;
+}
+
+function getFallbackNamedArtifactStore(table: NamedArtifactTable): Map<string, NamedArtifact[]> {
+  let tableStore = fallbackNamedArtifacts.get(table);
+  if (!tableStore) {
+    tableStore = new Map<string, NamedArtifact[]>();
+    fallbackNamedArtifacts.set(table, tableStore);
+  }
+  return tableStore;
 }
 
 function normalizeCompareDraft(value: CompareDraft | null | undefined): CompareDraft {
@@ -257,7 +270,12 @@ export async function loadWorkspaceSettings(
   workspaceKey: string | null | undefined,
 ): Promise<WorkspaceSettingsState> {
   const client = getBrowserClient();
-  if (!client) return pickWorkspaceSettings(DEFAULT_SETTINGS);
+  if (!client) {
+    const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+    return (
+      fallbackWorkspaceSettings.get(scopedWorkspaceKey) ?? pickWorkspaceSettings(DEFAULT_SETTINGS)
+    );
+  }
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
 
   const response = await client
@@ -277,12 +295,17 @@ export async function saveWorkspaceSettings(
   workspaceKey: string | null | undefined,
   settings: SettingsState,
 ): Promise<void> {
-  const client = assertBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const workspaceSettings = pickWorkspaceSettings(settings);
+  const client = getBrowserClient();
+  if (!client) {
+    fallbackWorkspaceSettings.set(scopedWorkspaceKey, workspaceSettings);
+    return;
+  }
   const { error } = await client.from(PERSISTENCE_TABLES.workspaceSettings).upsert(
     {
       workspace_key: scopedWorkspaceKey,
-      payload: pickWorkspaceSettings(settings),
+      payload: workspaceSettings,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'workspace_key' },
@@ -298,8 +321,14 @@ export async function loadCompareDraftForScope(
   workspaceKey: string | null | undefined,
 ): Promise<CompareDraft> {
   const client = getBrowserClient();
-  if (!client) return DEFAULT_COMPARE_DRAFT;
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!client) {
+    return normalizeCompareDraft(
+      fallbackCompareDrafts.get(
+        storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
+      ),
+    );
+  }
 
   const response = await client
     .from(PERSISTENCE_TABLES.compareDrafts)
@@ -320,14 +349,22 @@ export async function saveCompareDraftForScope(
   scope: CompareDraftScope,
   workspaceKey: string | null | undefined,
 ): Promise<void> {
-  const client = assertBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const normalizedDraft = normalizeCompareDraft(draft);
+  const client = getBrowserClient();
+  if (!client) {
+    fallbackCompareDrafts.set(
+      storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
+      normalizedDraft,
+    );
+    return;
+  }
   const { error } = await client.from(PERSISTENCE_TABLES.compareDrafts).upsert(
     {
       id: storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
       workspace_key: scopedWorkspaceKey,
       scope,
-      payload: normalizeCompareDraft(draft),
+      payload: normalizedDraft,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'id' },
@@ -374,8 +411,12 @@ export async function loadCompareSetsShared(
   workspaceKey: string | null | undefined,
 ): Promise<CompareSet[]> {
   const client = getBrowserClient();
-  if (!client) return [];
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!client) {
+    return normalizeNamedArtifactArray<CompareSet>(
+      getFallbackNamedArtifactStore(PERSISTENCE_TABLES.compareSets).get(scopedWorkspaceKey) ?? [],
+    );
+  }
 
   const response = await client
     .from(PERSISTENCE_TABLES.compareSets)
@@ -394,6 +435,14 @@ export async function saveCompareSetsShared(
   workspaceKey: string | null | undefined,
   sets: CompareSet[],
 ): Promise<void> {
+  const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!getBrowserClient()) {
+    getFallbackNamedArtifactStore(PERSISTENCE_TABLES.compareSets).set(
+      scopedWorkspaceKey,
+      sortByUpdatedDescending(sets),
+    );
+    return;
+  }
   await replaceNamedArtifactsForWorkspace(PERSISTENCE_TABLES.compareSets, workspaceKey, sets);
 }
 
@@ -402,8 +451,12 @@ export async function loadNamedArtifactsShared<T extends NamedArtifact>(
   workspaceKey: string | null | undefined,
 ): Promise<T[]> {
   const client = getBrowserClient();
-  if (!client) return [];
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!client) {
+    return normalizeNamedArtifactArray<T>(
+      getFallbackNamedArtifactStore(table).get(scopedWorkspaceKey) ?? [],
+    );
+  }
 
   const response = await client
     .from(table)
@@ -423,6 +476,11 @@ export async function saveNamedArtifactsShared<T extends NamedArtifact>(
   workspaceKey: string | null | undefined,
   items: T[],
 ): Promise<void> {
+  const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!getBrowserClient()) {
+    getFallbackNamedArtifactStore(table).set(scopedWorkspaceKey, sortByUpdatedDescending(items));
+    return;
+  }
   await replaceNamedArtifactsForWorkspace(table, workspaceKey, items);
 }
 
@@ -438,8 +496,10 @@ export async function getStrategyRecordByIdShared(
   id: string,
 ): Promise<StrategyRecord | null> {
   const client = getBrowserClient();
-  if (!client) return null;
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!client) {
+    return fallbackStrategyRecords.get(storageIdForWorkspace(scopedWorkspaceKey, id)) ?? null;
+  }
 
   const response = await client
     .from(PERSISTENCE_TABLES.strategyRecords)
@@ -457,8 +517,12 @@ export async function getStrategyRecordByIdShared(
 }
 
 export async function saveStrategyRecordShared(record: StrategyRecord): Promise<void> {
-  const client = assertBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(getEventWorkspaceKey(record.eventKey));
+  const client = getBrowserClient();
+  if (!client) {
+    fallbackStrategyRecords.set(storageIdForWorkspace(scopedWorkspaceKey, record.id), record);
+    return;
+  }
   const { error } = await client.from(PERSISTENCE_TABLES.strategyRecords).upsert(
     {
       id: record.id,
@@ -483,8 +547,23 @@ export async function listStrategyRecordsShared(
   workspaceKey: string | null | undefined,
 ): Promise<StrategyRecordSummary[]> {
   const client = getBrowserClient();
-  if (!client) return [];
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  if (!client) {
+    return [...fallbackStrategyRecords.entries()]
+      .filter(([id]) => id.startsWith(`${scopedWorkspaceKey}::`))
+      .map(([, row]) => row)
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+      .map((row) => ({
+        id: row.id,
+        eventKey: row.eventKey,
+        matchKey: row.matchKey,
+        matchLabel: row.matchLabel,
+        eventName: row.eventName,
+        status: row.status,
+        updatedAtMs: row.updatedAtMs,
+        allianceTeams: row.allianceTeams,
+      }));
+  }
 
   const response = await client
     .from(PERSISTENCE_TABLES.strategyRecords)

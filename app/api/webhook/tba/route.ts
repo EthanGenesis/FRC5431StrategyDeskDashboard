@@ -44,6 +44,10 @@ function normalizeTbaWebhookSignal(payload: z.infer<typeof tbaWebhookSchema>) {
     (typeof eventRecord?.key === 'string' && eventRecord.key) ||
     null;
 
+  if (!eventKey && ['verification', 'ping'].includes(messageType)) {
+    return null;
+  }
+
   if (!eventKey) {
     throw new Error('TBA webhook payload is missing event_key.');
   }
@@ -104,7 +108,9 @@ export async function POST(req: Request): Promise<NextResponse<{ ok: true } | { 
     }
 
     const normalized = normalizeTbaWebhookSignal(parsed);
-    await appendEventLiveSignal(normalized);
+    if (normalized) {
+      await appendEventLiveSignal(normalized);
+    }
 
     return routeJson(routeContext, { ok: true });
   } catch (error) {

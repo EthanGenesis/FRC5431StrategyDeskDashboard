@@ -542,6 +542,12 @@ function subTabTranslationKey(majorTab, tab) {
   return `nav.sub.${normalizeTranslationKey(majorTab)}.${normalizeTranslationKey(tab)}`;
 }
 
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
+
 export default function HomePage() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [draftTeam, setDraftTeam] = useState(5431);
@@ -859,6 +865,105 @@ export default function HomePage() {
       setCurrentSubTab('DATA');
     }
   }
+  useEffect(() => {
+    function handleGlobalShortcut(event) {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      if (isTypingTarget(event.target)) return;
+
+      const key = event.key.toLowerCase();
+
+      if (key === '1') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        return;
+      }
+      if (key === '2') {
+        event.preventDefault();
+        setMajorTab('HISTORICAL');
+        return;
+      }
+      if (key === '3') {
+        event.preventDefault();
+        setMajorTab('PREDICT');
+        return;
+      }
+      if (key === '4') {
+        event.preventDefault();
+        setMajorTab('SETTINGS');
+        return;
+      }
+      if (key === 'n') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('NOW');
+        return;
+      }
+      if (key === 's') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('SCHEDULE');
+        return;
+      }
+      if (key === 'm') {
+        event.preventDefault();
+        setMajorTab('CURRENT');
+        setCurrentSubTab('MATCH');
+        return;
+      }
+      if (key === 't') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('STRATEGY');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('STRATEGY');
+        }
+        return;
+      }
+      if (key === 'r') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('RANKINGS');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('RANKINGS');
+        }
+        return;
+      }
+      if (key === 'e') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('EVENT');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('EVENT');
+        }
+        return;
+      }
+      if (key === 'd') {
+        event.preventDefault();
+        if (majorTab === 'HISTORICAL') {
+          setMajorTab('HISTORICAL');
+          setHistoricalSubTab('DATA');
+        } else {
+          setMajorTab('CURRENT');
+          setCurrentSubTab('DATA');
+        }
+        return;
+      }
+      if (key === 'p') {
+        event.preventDefault();
+        setMajorTab('PREDICT');
+        setPredictSubTab('PREDICT');
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalShortcut);
+  }, [majorTab]);
   useEffect(() => {
     let cancelled = false;
 
@@ -7816,6 +7921,20 @@ export default function HomePage() {
         value: snapshot?.sb?.teamEvents?.length ?? 0,
       },
     ];
+    const shortcutRows = [
+      { combo: 'Alt+1', action: t('shortcut.current', 'Jump to CURRENT') },
+      { combo: 'Alt+2', action: t('shortcut.historical', 'Jump to HISTORICAL') },
+      { combo: 'Alt+3', action: t('shortcut.predict', 'Jump to PREDICT') },
+      { combo: 'Alt+4', action: t('shortcut.settings', 'Jump to SETTINGS') },
+      { combo: 'Alt+N', action: t('shortcut.now', 'Open NOW') },
+      { combo: 'Alt+S', action: t('shortcut.schedule', 'Open SCHEDULE') },
+      { combo: 'Alt+M', action: t('shortcut.match', 'Open MATCH') },
+      { combo: 'Alt+T', action: t('shortcut.strategy', 'Open STRATEGY') },
+      { combo: 'Alt+R', action: t('shortcut.rankings', 'Open RANKINGS') },
+      { combo: 'Alt+E', action: t('shortcut.event', 'Open EVENT') },
+      { combo: 'Alt+D', action: t('shortcut.data', 'Open DATA') },
+      { combo: 'Alt+P', action: t('shortcut.predict_tab', 'Open PREDICT workspace') },
+    ];
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
         <div className="grid-2">
@@ -7925,6 +8044,30 @@ export default function HomePage() {
               >
                 {t('settings.open_explorer', 'Open Explorer')}
               </button>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                  {t('settings.shortcuts.title', 'Keyboard Shortcuts')}
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  {t(
+                    'settings.shortcuts.help',
+                    'Global shortcuts stay disabled while you are typing in an input field.',
+                  )}
+                </div>
+                <div className="grid-2">
+                  {shortcutRows.map((row) => (
+                    <div
+                      key={row.combo}
+                      style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}
+                    >
+                      <span className="mono">{row.combo}</span>
+                      <span className="muted" style={{ fontSize: 12, textAlign: 'right' }}>
+                        {row.action}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
           <div className="panel" style={{ padding: 16 }}>

@@ -30,8 +30,17 @@ async function firstGet<T>(requestPath: string): Promise<T> {
   );
 }
 
-function firstStatus(enabled: boolean, error: unknown = null): SourceStatus {
+async function firstGetOptional<T>(requestPath: string): Promise<T | null> {
+  try {
+    return await firstGet<T>(requestPath);
+  } catch {
+    return null;
+  }
+}
+
+function firstStatus(enabled: boolean, hasData: boolean, error: unknown = null): SourceStatus {
   if (!enabled) return 'disabled';
+  if (hasData) return 'available';
   return error ? 'error' : 'available';
 }
 
@@ -55,25 +64,38 @@ export async function loadOfficialEventSnapshot(
 
   try {
     const [events, matches, rankings, awards] = await Promise.all([
-      firstGet<Record<string, unknown>>(`/${year}/events?eventCode=${encodeURIComponent(code)}`),
-      firstGet<Record<string, unknown>>(`/${year}/matches/${encodeURIComponent(code)}`),
-      firstGet<Record<string, unknown>>(`/${year}/rankings/${encodeURIComponent(code)}`),
-      firstGet<Record<string, unknown>>(`/${year}/awards/${encodeURIComponent(code)}`),
+      firstGetOptional<Record<string, unknown>>(
+        `/${year}/events?eventCode=${encodeURIComponent(code)}`,
+      ),
+      firstGetOptional<Record<string, unknown>>(`/${year}/matches/${encodeURIComponent(code)}`),
+      firstGetOptional<Record<string, unknown>>(`/${year}/rankings/${encodeURIComponent(code)}`),
+      firstGetOptional<Record<string, unknown>>(
+        `/${year}/awards/event/${encodeURIComponent(code)}`,
+      ),
     ]);
 
     const eventList = Array.isArray(events?.Events)
       ? (events.Events as Record<string, unknown>[])
       : [];
     const event = eventList[0] ?? null;
+    const normalizedMatches = Array.isArray(matches?.Matches)
+      ? (matches.Matches as Record<string, unknown>[])
+      : [];
+    const normalizedAwards = Array.isArray(awards?.Awards)
+      ? (awards.Awards as Record<string, unknown>[])
+      : [];
+    const hasCoreData =
+      Boolean(event) ||
+      normalizedMatches.length > 0 ||
+      Boolean(rankings) ||
+      normalizedAwards.length > 0;
 
     return {
-      status: firstStatus(enabled),
+      status: firstStatus(enabled, hasCoreData),
       event,
-      matches: Array.isArray(matches?.Matches)
-        ? (matches.Matches as Record<string, unknown>[])
-        : [],
+      matches: normalizedMatches,
       rankings: rankings ?? null,
-      awards: Array.isArray(awards?.Awards) ? (awards.Awards as Record<string, unknown>[]) : [],
+      awards: normalizedAwards,
       district: event
         ? {
             districtCode: event.districtCode ?? null,

@@ -244,7 +244,7 @@ function buildValidationSnapshot(input: {
 
   const summary =
     mismatchCount > 0
-      ? `${mismatchCount} official discrepancy${mismatchCount === 1 ? '' : 'ies'}`
+      ? `${mismatchCount} official discrepanc${mismatchCount === 1 ? 'y' : 'ies'}`
       : missingCount > 0
         ? `${missingCount} official comparison gap${missingCount === 1 ? '' : 's'}`
         : 'Working and official overlap checks are aligned';

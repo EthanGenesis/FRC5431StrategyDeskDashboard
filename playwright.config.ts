@@ -11,7 +11,7 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'powershell -ExecutionPolicy Bypass -File .\\scripts\\start-e2e-server.ps1',
+    command: 'node ./scripts/start-e2e-server.mjs',
     url: 'http://127.0.0.1:3001',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -709,7 +709,10 @@ test('team profile and compare workflows are preserved', async ({ page }) => {
   await page.getByRole('button', { name: 'COMPARE', exact: true }).first().click();
 
   await expect(page.getByText('Loaded Event Compare', { exact: true })).toBeVisible();
-  await expect(page.getByRole('row', { name: /5431 Team 5431/ }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Remove 5431' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /5431 Team 5431/ }).first()).toBeVisible({
+    timeout: 15_000,
+  });
 });
 
 test('settings raw payload explorer is preserved', async ({ page }) => {

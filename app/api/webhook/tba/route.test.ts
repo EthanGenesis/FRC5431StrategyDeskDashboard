@@ -2,8 +2,10 @@
 import crypto from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AppEnv } from '../../../../lib/env';
+
 const envMocks = vi.hoisted(() => ({
-  getAppEnv: vi.fn(() => ({
+  getAppEnv: vi.fn<() => AppEnv>(() => ({
     TBA_AUTH_KEY: 'test-key',
     TBA_WEBHOOK_SECRET: undefined,
     APP_LOG_LEVEL: 'info',
@@ -12,7 +14,7 @@ const envMocks = vi.hoisted(() => ({
     OTEL_DIAG_LOGGING: false,
     OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
     OTEL_SERVICE_NAME: 'tbsb-dashboard',
-  })) as any,
+  })),
 }));
 
 const sourceCacheMocks = vi.hoisted(() => ({
@@ -30,18 +32,20 @@ vi.mock('../../../../lib/source-cache-server', () => ({
 import { POST } from './route';
 
 describe('/api/webhook/tba', () => {
+  const defaultEnv: AppEnv = {
+    TBA_AUTH_KEY: 'test-key',
+    TBA_WEBHOOK_SECRET: undefined,
+    APP_LOG_LEVEL: 'info',
+    NODE_ENV: 'test',
+    OTEL_ENABLED: false,
+    OTEL_DIAG_LOGGING: false,
+    OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
+    OTEL_SERVICE_NAME: 'tbsb-dashboard',
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
-    envMocks.getAppEnv.mockReturnValue({
-      TBA_AUTH_KEY: 'test-key',
-      TBA_WEBHOOK_SECRET: undefined,
-      APP_LOG_LEVEL: 'info',
-      NODE_ENV: 'test',
-      OTEL_ENABLED: false,
-      OTEL_DIAG_LOGGING: false,
-      OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
-      OTEL_SERVICE_NAME: 'tbsb-dashboard',
-    });
+    vi.mocked(envMocks.getAppEnv).mockReturnValue(defaultEnv);
   });
 
   it('normalizes and stores valid webhook events', async () => {
@@ -88,15 +92,9 @@ describe('/api/webhook/tba', () => {
   });
 
   it('validates X-TBA-HMAC when a webhook secret is configured', async () => {
-    envMocks.getAppEnv.mockReturnValue({
-      TBA_AUTH_KEY: 'test-key',
+    vi.mocked(envMocks.getAppEnv).mockReturnValue({
+      ...defaultEnv,
       TBA_WEBHOOK_SECRET: 'super-secret',
-      APP_LOG_LEVEL: 'info',
-      NODE_ENV: 'test',
-      OTEL_ENABLED: false,
-      OTEL_DIAG_LOGGING: false,
-      OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
-      OTEL_SERVICE_NAME: 'tbsb-dashboard',
     });
 
     const body = JSON.stringify({
@@ -124,15 +122,9 @@ describe('/api/webhook/tba', () => {
   });
 
   it('rejects invalid X-TBA-HMAC when a webhook secret is configured', async () => {
-    envMocks.getAppEnv.mockReturnValue({
-      TBA_AUTH_KEY: 'test-key',
+    vi.mocked(envMocks.getAppEnv).mockReturnValue({
+      ...defaultEnv,
       TBA_WEBHOOK_SECRET: 'super-secret',
-      APP_LOG_LEVEL: 'info',
-      NODE_ENV: 'test',
-      OTEL_ENABLED: false,
-      OTEL_DIAG_LOGGING: false,
-      OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
-      OTEL_SERVICE_NAME: 'tbsb-dashboard',
     });
 
     const response = await POST(
@@ -155,5 +147,35 @@ describe('/api/webhook/tba', () => {
     expect(await response.json()).toEqual({
       error: 'Invalid TBA webhook signature',
     });
+  });
+
+  it('accepts verification payloads without an event key when the signature is valid', async () => {
+    vi.mocked(envMocks.getAppEnv).mockReturnValue({
+      ...defaultEnv,
+      TBA_WEBHOOK_SECRET: 'super-secret',
+    });
+
+    const body = JSON.stringify({
+      message_type: 'verification',
+      webhook_id: 'verify-1',
+      message_data: {
+        verification_key: 'abc123',
+      },
+    });
+    const signature = crypto.createHmac('sha256', 'super-secret').update(body).digest('hex');
+
+    const response = await POST(
+      new Request('http://localhost/api/webhook/tba', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-tba-hmac': signature,
+        },
+        body,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(sourceCacheMocks.appendEventLiveSignal).not.toHaveBeenCalled();
   });
 });
