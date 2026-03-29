@@ -2284,11 +2284,30 @@ export default function HomePage() {
     return map;
   }, [sortedMatches]);
   useEffect(() => {
-    const nextOverrides = {};
-    Object.entries(predictBaseMap).forEach(([k, v]) => {
-      nextOverrides[k] = { redRp: v.redRp, blueRp: v.blueRp };
+    if (!loadedEventKey) return;
+    const matchKeys = Object.keys(predictBaseMap);
+    if (!matchKeys.length) return;
+    const eventPrefix = `${loadedEventKey}_`;
+    if (!matchKeys.every((key) => key.startsWith(eventPrefix))) return;
+    setPredictOverrides((prev) => {
+      let changed = false;
+      const nextOverrides = {};
+      Object.entries(predictBaseMap).forEach(([key, value]) => {
+        if (Object.prototype.hasOwnProperty.call(prev, key)) {
+          nextOverrides[key] = prev[key];
+          return;
+        }
+        nextOverrides[key] = { redRp: value.redRp, blueRp: value.blueRp };
+        changed = true;
+      });
+      if (
+        Object.keys(prev).length !== matchKeys.length ||
+        Object.keys(prev).some((key) => !Object.prototype.hasOwnProperty.call(predictBaseMap, key))
+      ) {
+        changed = true;
+      }
+      return changed ? nextOverrides : prev;
     });
-    setPredictOverrides(nextOverrides);
   }, [loadedEventKey, predictBaseMap]);
   const predictMatchRows = useMemo(() => {
     let rows = sortedMatches.filter((m) =>

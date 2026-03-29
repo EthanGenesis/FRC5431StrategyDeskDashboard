@@ -856,6 +856,31 @@ test('predict surfaces public-data alliance heuristics', async ({ page }) => {
   await expect(page.getByText('Highest Ceiling', { exact: true }).first()).toBeVisible();
 });
 
+test('predict manual overrides stay locked across polling', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'PREDICT' }).click();
+  await page
+    .getByLabel('PREDICT subsections')
+    .getByRole('button', { name: 'PREDICT', exact: true })
+    .click();
+  await page.getByRole('button', { name: 'All Quals' }).click();
+
+  const matchRow = page.locator('tr').filter({ hasText: 'QM1' }).first();
+  const redRpInput = matchRow.locator('input[type="number"]').first();
+
+  await redRpInput.fill('6');
+  await expect(redRpInput).toHaveValue('6');
+
+  await page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/snapshot?') && response.request().method() === 'GET',
+    { timeout: 8000 },
+  );
+
+  await expect(redRpInput).toHaveValue('6');
+});
+
 test('quick jump opens cross-workspace targets', async ({ page }) => {
   await loadMockedDeskState(page);
 
