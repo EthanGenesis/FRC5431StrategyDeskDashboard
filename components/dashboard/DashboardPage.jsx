@@ -85,6 +85,32 @@ function averageNullable(values) {
   if (!cleaned.length) return null;
   return mean(cleaned);
 }
+function permutationCount(n, k) {
+  const total = Math.max(0, Math.floor(Number(n) || 0));
+  const picked = Math.max(0, Math.floor(Number(k) || 0));
+  if (!total || !picked || picked > total) return 0n;
+  let out = 1n;
+  for (let index = 0; index < picked; index += 1) {
+    out *= BigInt(total - index);
+  }
+  return out;
+}
+function combinationCount(n, k) {
+  const total = Math.max(0, Math.floor(Number(n) || 0));
+  const picked = Math.max(0, Math.floor(Number(k) || 0));
+  if (!total || !picked || picked > total) return 0n;
+  const effectivePicked = Math.min(picked, total - picked);
+  let numerator = 1n;
+  let denominator = 1n;
+  for (let index = 1; index <= effectivePicked; index += 1) {
+    numerator *= BigInt(total - effectivePicked + index);
+    denominator *= BigInt(index);
+  }
+  return numerator / denominator;
+}
+function formatBigInt(value) {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
 function topInsightRows(rows, key) {
   return [...rows].sort((a, b) => Number(b?.[key] ?? 0) - Number(a?.[key] ?? 0)).slice(0, 3);
 }
@@ -554,6 +580,7 @@ function isTypingTarget(target) {
 }
 
 export default function HomePage() {
+  const MONTE_CARLO_SCENARIO_DEPTH = 12;
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [draftTeam, setDraftTeam] = useState(5431);
   const [draftEventKey, setDraftEventKey] = useState('');
@@ -2438,7 +2465,7 @@ export default function HomePage() {
     });
     const ourKey = loadedTeam != null ? tbaTeamKey(loadedTeam) : '';
     const ourSeeds = [];
-    const top16Counts = new Map();
+    const topSeedCounts = new Map();
     for (let run = 0; run < Math.max(1, simRuns); run += 1) {
       const totals = new Map(totalsBase);
       for (const match of futureQuals) {
@@ -2468,11 +2495,11 @@ export default function HomePage() {
         avgTotals.set(r.teamKey, (avgTotals.get(r.teamKey) ?? 0) + r.total);
         if (r.teamKey === ourKey) ourSeeds.push(idx + 1);
       });
-      const top16Key = ranked
-        .slice(0, 16)
+      const topSeedKey = ranked
+        .slice(0, MONTE_CARLO_SCENARIO_DEPTH)
         .map((r) => r.teamKey)
         .join(',');
-      top16Counts.set(top16Key, (top16Counts.get(top16Key) ?? 0) + 1);
+      topSeedCounts.set(topSeedKey, (topSeedCounts.get(topSeedKey) ?? 0) + 1);
     }
     const summaryRows = eventTeamRows
       .map((row) => {
@@ -2518,7 +2545,8 @@ export default function HomePage() {
       ourObservedLowest: ourSorted.length ? ourSorted[ourSorted.length - 1] : null,
       ourTheoreticalHighest: 1,
       ourTheoreticalLowest: eventTeamRows.length || null,
-      top16Scenarios: Array.from(top16Counts.entries())
+      uniqueScenarioCount: topSeedCounts.size,
+      top16Scenarios: Array.from(topSeedCounts.entries())
         .map(([key, count]) => ({
           id: `mc_${key}`,
           teams: key.split(',').filter(Boolean),
@@ -2563,11 +2591,21 @@ export default function HomePage() {
       ourObservedLowest: null,
       ourTheoreticalHighest: 1,
       ourTheoreticalLowest: eventTeamRows.length || null,
+      uniqueScenarioCount: 0,
       top16Scenarios: [],
     }),
     [eventTeamRows],
   );
   const monteCarloProjection = mcProjectionSnapshot ?? emptyMonteCarloProjection;
+  const monteCarloScenarioSpace = useMemo(() => {
+    const teamCount = eventTeamRows.length;
+    const depth = Math.min(MONTE_CARLO_SCENARIO_DEPTH, teamCount);
+    return {
+      depth,
+      orderedCount: permutationCount(teamCount, depth),
+      unorderedCount: combinationCount(teamCount, depth),
+    };
+  }, [MONTE_CARLO_SCENARIO_DEPTH, eventTeamRows.length]);
   useEffect(() => {
     if (!mcProjectionSnapshot && eventTeamRows.length) {
       const computed = computeMonteCarloProjection();
@@ -6772,10 +6810,16 @@ export default function HomePage() {
           </div>
           <div className="panel" style={{ padding: 16 }}>
             <div style={{ fontWeight: 900, marginBottom: 10 }}>
-              Top 25 Monte Carlo Top-16 Scenarios
+              {`Top 25 Monte Carlo Top-${MONTE_CARLO_SCENARIO_DEPTH} Scenarios`}
             </div>
             <div className="muted" style={{ marginBottom: 8 }}>
-              Unique = exact ordered top 16. Use these in ALLIANCE.
+              {`Unique = exact ordered top ${MONTE_CARLO_SCENARIO_DEPTH}. Use these in ALLIANCE.`}
+            </div>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              {`Current event space: ${formatBigInt(monteCarloScenarioSpace.orderedCount)} ordered top-${monteCarloScenarioSpace.depth} configurations (${formatBigInt(monteCarloScenarioSpace.unorderedCount)} unordered membership sets).`}
+            </div>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              {`This run observed ${formatBigInt(BigInt(monteCarloProjection.uniqueScenarioCount ?? 0))} unique top-${MONTE_CARLO_SCENARIO_DEPTH} scenarios across ${simRuns.toLocaleString()} simulations.`}
             </div>
             <div style={{ overflow: 'auto', maxHeight: 300 }}>
               <table
@@ -6790,7 +6834,7 @@ export default function HomePage() {
                     <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Use</th>
                     <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Prob</th>
                     <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Count</th>
-                    <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Top 8</th>
+                    <th style={{ padding: 8, borderBottom: '1px solid #223048' }}>Preview</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -7040,7 +7084,9 @@ export default function HomePage() {
                     value={mcScenarioSelection}
                     onChange={(e) => setMcScenarioSelection(e.target.value)}
                   >
-                    <option value="most_likely">Most likely top 16</option>
+                    <option value="most_likely">
+                      {`Most likely top ${MONTE_CARLO_SCENARIO_DEPTH}`}
+                    </option>
                     {(chosenPredictScenario?.top16Scenarios ?? []).map((s) => (
                       <option key={s.id} value={s.id}>
                         {pctPrecise(s.probability)} ({s.count}) — {s.teams.slice(0, 8).join(' / ')}
