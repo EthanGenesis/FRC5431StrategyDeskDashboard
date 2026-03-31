@@ -354,6 +354,23 @@ function webcastStateStopsFloating(value) {
   return value === 'ended' || value === 'error';
 }
 
+function getStickyViewportTopInset() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return 0;
+
+  return ['.dashboard-productbar', '.dashboard-topbar'].reduce((maxBottom, selector) => {
+    const element = document.querySelector(selector);
+    if (!(element instanceof HTMLElement)) return maxBottom;
+
+    const style = window.getComputedStyle(element);
+    if (style.position !== 'sticky' && style.position !== 'fixed') return maxBottom;
+
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom <= 0) return maxBottom;
+
+    return Math.max(maxBottom, rect.bottom);
+  }, 0);
+}
+
 const CURRENT_TABS = [
   'NOW',
   'SCHEDULE',
@@ -1207,27 +1224,42 @@ export default function HomePage() {
     if (
       !node ||
       typeof window === 'undefined' ||
-      typeof window.IntersectionObserver === 'undefined'
+      typeof node.getBoundingClientRect !== 'function'
     ) {
       setInlineWebcastInView(true);
       return undefined;
     }
 
-    const observer = new window.IntersectionObserver(
-      ([entry]) => {
-        const nextVisible =
-          Boolean(entry?.isIntersecting) && Number(entry?.intersectionRatio ?? 0) >= 0.45;
-        setInlineWebcastInView((prev) => (prev === nextVisible ? prev : nextVisible));
-      },
-      {
-        threshold: [0, 0.15, 0.45, 0.7],
-        rootMargin: '0px 0px -48px 0px',
-      },
-    );
+    let frameId = 0;
+    const evaluateVisibility = () => {
+      const rect = node.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const topInset = getStickyViewportTopInset() + 8;
+      const bottomInset = 24;
+      const visibleTop = Math.max(rect.top, topInset);
+      const visibleBottom = Math.min(rect.bottom, viewportHeight - bottomInset);
+      const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+      const visibleRatio = rect.height > 0 ? visibleHeight / rect.height : 0;
+      const nextVisible = rect.bottom > topInset && visibleRatio >= 0.45;
 
-    observer.observe(node);
+      setInlineWebcastInView((prev) => (prev === nextVisible ? prev : nextVisible));
+    };
+
+    const scheduleEvaluation = () => {
+      if (frameId) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        evaluateVisibility();
+      });
+    };
+
+    scheduleEvaluation();
+    window.addEventListener('scroll', scheduleEvaluation, { passive: true });
+    window.addEventListener('resize', scheduleEvaluation);
     return () => {
-      observer.disconnect();
+      if (frameId) window.cancelAnimationFrame(frameId);
+      window.removeEventListener('scroll', scheduleEvaluation);
+      window.removeEventListener('resize', scheduleEvaluation);
     };
   }, [isNowTab, preferredYouTubeVideoId]);
   const handleInlineWebcastPlayIntent = useCallback(() => {
