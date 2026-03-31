@@ -1,17 +1,8 @@
 'use client';
+import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../../lib/storage';
-import StrategyWorkspace from '../StrategyWorkspace';
-import TeamProfileTab from '../TeamProfileTab';
-import PreEventTab from '../PreEventTab';
-import CompareTab from '../CompareTab';
-import AnalyticsChartBlock from '../AnalyticsChartBlock';
-import TeamContextAnalyticsBlock from '../TeamContextAnalyticsBlock';
-import DataSuperTab from '../DataSuperTab';
-import RawPayloadExplorer from '../RawPayloadExplorer';
-import DistrictPointsTab from '../DistrictPointsTab';
-import GameManualTab from '../GameManualTab';
 import YouTubeWebcastPlayer from '../YouTubeWebcastPlayer';
 import PageHeader from '../ui/PageHeader';
 import ProductClock from '../ui/ProductClock';
@@ -55,6 +46,46 @@ import {
   normalizeTranslationKey,
   translate,
 } from '../../lib/product-preferences';
+
+function DeferredPanelPlaceholder({ label = 'Loading section...' }) {
+  return (
+    <section className="card" aria-busy="true">
+      <div className="muted">{label}</div>
+    </section>
+  );
+}
+
+const deferredPanel = (loader, label) =>
+  dynamic(loader, {
+    ssr: false,
+    loading: () => <DeferredPanelPlaceholder label={label} />,
+  });
+
+const StrategyWorkspace = deferredPanel(
+  () => import('../StrategyWorkspace'),
+  'Loading strategy workspace...',
+);
+const TeamProfileTab = deferredPanel(() => import('../TeamProfileTab'), 'Loading team profile...');
+const PreEventTab = deferredPanel(() => import('../PreEventTab'), 'Loading season scouting...');
+const CompareTab = deferredPanel(() => import('../CompareTab'), 'Loading compare tools...');
+const AnalyticsChartBlock = deferredPanel(
+  () => import('../AnalyticsChartBlock'),
+  'Loading chart...',
+);
+const TeamContextAnalyticsBlock = deferredPanel(
+  () => import('../TeamContextAnalyticsBlock'),
+  'Loading team context...',
+);
+const DataSuperTab = deferredPanel(() => import('../DataSuperTab'), 'Loading data explorer...');
+const RawPayloadExplorer = deferredPanel(
+  () => import('../RawPayloadExplorer'),
+  'Loading payload explorer...',
+);
+const DistrictPointsTab = deferredPanel(
+  () => import('../DistrictPointsTab'),
+  'Loading district points...',
+);
+const GameManualTab = deferredPanel(() => import('../GameManualTab'), 'Loading game manual...');
 
 const EVENT_SEARCH_YEAR = 2026;
 const AUDIO_PATTERN_BY_QUEUE = {
