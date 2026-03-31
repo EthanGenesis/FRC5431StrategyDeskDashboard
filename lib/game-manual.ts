@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { isTag, type AnyNode } from 'domhandler';
 
 import type { GameManualSection, GameManualSnapshot, GameManualTocItem } from './types';
 
@@ -145,7 +146,16 @@ function buildSectionsAndToc(rawHtml: string): {
 } {
   const $ = load(rawHtml);
   const body = $('body');
-  const bodyChildren = body.children().toArray();
+  const bodyBlocks = body.contents().toArray();
+  const contentNodes: AnyNode[] = bodyBlocks.flatMap((node): AnyNode[] => {
+    if (!isTag(node)) return [node];
+    const tagName = node.tagName.toLowerCase();
+    const className = String(node.attribs.class ?? '');
+    if (tagName === 'div' && /\bWordSection\d+\b/i.test(className)) {
+      return $(node).contents().toArray();
+    }
+    return [node];
+  });
 
   const sections: GameManualSection[] = [];
   let sectionIndex = 0;
@@ -175,29 +185,71 @@ function buildSectionsAndToc(rawHtml: string): {
     currentSection = null;
   };
 
-  for (const node of bodyChildren) {
-    if (String(node.type) !== 'tag') continue;
-    const tagName = node.tagName.toLowerCase();
+  const headingInfoForNode = (
+    node: AnyNode,
+  ): {
+    id: string;
+    title: string;
+    number: string | null;
+    level: 1 | 2 | 3 | 4;
+  } | null => {
+    if (!isTag(node)) return null;
 
-    if (HEADING_TAGS.has(tagName)) {
-      finalizeCurrentSection();
-      sectionIndex += 1;
-      const heading = $(node);
-      const anchorNames = heading
-        .find('a[name]')
-        .map((_, anchor) => String($(anchor).attr('name') ?? '').trim())
-        .get()
-        .filter(Boolean);
-      const id =
+    const nodeTagName = node.tagName.toLowerCase();
+    const nodeElement = $(node);
+    const headingElement = HEADING_TAGS.has(nodeTagName)
+      ? nodeElement
+      : nodeElement
+          .find('h1,h2,h3,h4')
+          .filter((_, element) => {
+            const wrapperText = normalizeWhitespace(nodeElement.text());
+            const headingText = normalizeWhitespace($(element).text());
+            if (!headingText) return false;
+            if (!wrapperText) return false;
+            return wrapperText === headingText || wrapperText.startsWith(headingText);
+          })
+          .first();
+
+    if (!headingElement.length) return null;
+
+    const title = normalizeWhitespace(headingElement.text());
+    if (!title) return null;
+
+    const anchorNames = headingElement
+      .find('a[name]')
+      .addBack('a[name]')
+      .map((_, anchor) => String($(anchor).attr('name') ?? '').trim())
+      .get()
+      .filter(Boolean);
+    const headingNode = headingElement.get(0);
+    const headingTagName =
+      headingNode && isTag(headingNode) ? headingNode.tagName.toLowerCase() : '';
+    const level = HEADING_TAGS.has(String(headingTagName))
+      ? (Number(String(headingTagName).slice(1)) as 1 | 2 | 3 | 4)
+      : 1;
+
+    return {
+      id:
         anchorNames.find((value) => value.startsWith('_Toc')) ??
         anchorNames[0] ??
-        `manual-section-${sectionIndex}`;
-      const title = normalizeWhitespace(heading.text());
+        `manual-section-${sectionIndex + 1}`,
+      title,
+      number: sectionNumberFromTitle(title),
+      level,
+    };
+  };
+
+  for (const node of contentNodes) {
+    if (!isTag(node)) continue;
+    const headingInfo = headingInfoForNode(node);
+    if (headingInfo) {
+      finalizeCurrentSection();
+      sectionIndex += 1;
       currentSection = {
-        id,
-        title,
-        number: sectionNumberFromTitle(title),
-        level: Number(tagName.slice(1)) as 1 | 2 | 3 | 4,
+        id: headingInfo.id,
+        title: headingInfo.title,
+        number: headingInfo.number,
+        level: headingInfo.level,
         chunks: [],
       };
       continue;

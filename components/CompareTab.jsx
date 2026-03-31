@@ -225,6 +225,18 @@ export default function CompareTab({
       updateDraft({ baselineTeamNumber: selectedTeamNumbers[0] ?? null });
   }, [selectedTeamNumbers, loadedTeam, draft.baselineTeamNumber, updateDraft]);
   useEffect(() => {
+    const normalizedLoadedTeam =
+      loadedTeam != null && Number.isFinite(Number(loadedTeam))
+        ? Math.floor(Number(loadedTeam))
+        : null;
+    if (scope !== 'current' || normalizedLoadedTeam == null || selectedTeamNumbers.length) return;
+    updateDraft((prev) => ({
+      ...prev,
+      teamNumbers: uniqNumbers([...(prev.teamNumbers ?? []), normalizedLoadedTeam]),
+      baselineTeamNumber: prev.baselineTeamNumber ?? normalizedLoadedTeam,
+    }));
+  }, [loadedTeam, scope, selectedTeamNumbers.length, updateDraft]);
+  useEffect(() => {
     if (!selectedTeamNumbers.length) return void setSnapshot(null);
     let cancelled = false;
     async function loadSnapshot() {

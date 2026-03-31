@@ -181,7 +181,96 @@ function createDiscrepancy(
   };
 }
 
-function buildValidationSnapshot(input: {
+export function comparableOfficialAwardCount(
+  awards: ExternalArray | null | undefined,
+): number | null {
+  if (!Array.isArray(awards)) return null;
+  const groupedAwards = new Set<string>();
+  for (const award of awards) {
+    const awardId = readNullableString(award?.awardId);
+    const awardName = readNullableString(award?.name);
+    groupedAwards.add(`${awardId ?? 'unknown'}::${awardName ?? 'unknown'}`);
+  }
+  return groupedAwards.size;
+}
+
+type ComparableOfficialMatchSummary = {
+  comparableCount: number | null;
+  ignoredCount: number;
+  ignoredReasons: string[];
+};
+
+export function comparableOfficialMatchSummary(
+  matches: ExternalArray | null | undefined,
+): ComparableOfficialMatchSummary {
+  if (!Array.isArray(matches)) {
+    return {
+      comparableCount: null,
+      ignoredCount: 0,
+      ignoredReasons: [],
+    };
+  }
+
+  const comparableKeys = new Set<string>();
+  let ignoredTestRows = 0;
+  let ignoredPlaceholderRows = 0;
+
+  for (const match of matches) {
+    const tournamentLevel = readNullableString(match?.tournamentLevel) ?? 'Unknown';
+    const description = readNullableString(match?.description) ?? '';
+    const matchNumber = readNullableString(match?.matchNumber) ?? '';
+    const series = readNullableString(match?.series) ?? '';
+    const actualStartTime = readNullableString(match?.actualStartTime);
+    const scheduleTime = readNullableString(match?.schedule);
+    const scoreRedFinal = match?.scoreRedFinal;
+    const scoreBlueFinal = match?.scoreBlueFinal;
+    const hasFinalScore =
+      scoreRedFinal != null &&
+      scoreBlueFinal != null &&
+      Number.isFinite(Number(scoreRedFinal)) &&
+      Number.isFinite(Number(scoreBlueFinal));
+    const isTestLike =
+      tournamentLevel === 'None' || /\b(test|practice)\b/i.test(description.toLowerCase());
+    const isPlaceholderTiebreaker =
+      tournamentLevel === 'Playoff' &&
+      /tiebreaker/i.test(description) &&
+      !actualStartTime &&
+      !scheduleTime &&
+      !hasFinalScore;
+
+    if (isTestLike) {
+      ignoredTestRows += 1;
+      continue;
+    }
+
+    if (isPlaceholderTiebreaker) {
+      ignoredPlaceholderRows += 1;
+      continue;
+    }
+
+    comparableKeys.add(`${tournamentLevel}::${series}::${matchNumber}::${description}`);
+  }
+
+  const ignoredReasons: string[] = [];
+  if (ignoredTestRows) {
+    ignoredReasons.push(
+      `${ignoredTestRows} test/practice row${ignoredTestRows === 1 ? '' : 's'} excluded`,
+    );
+  }
+  if (ignoredPlaceholderRows) {
+    ignoredReasons.push(
+      `${ignoredPlaceholderRows} unused playoff tiebreaker placeholder${ignoredPlaceholderRows === 1 ? '' : 's'} excluded`,
+    );
+  }
+
+  return {
+    comparableCount: comparableKeys.size,
+    ignoredCount: ignoredTestRows + ignoredPlaceholderRows,
+    ignoredReasons,
+  };
+}
+
+export function buildValidationSnapshot(input: {
   eventKey: string;
   tbaEvent: ExternalRecord | null;
   tbaMatches: ExternalArray;
@@ -203,6 +292,8 @@ function buildValidationSnapshot(input: {
     : Array.isArray(official?.rankings?.rankings)
       ? official.rankings.rankings.length
       : null;
+  const comparableOfficialMatches = comparableOfficialMatchSummary(official?.matches);
+  const comparableOfficialAwards = comparableOfficialAwardCount(official?.awards);
   const officialMatchCount = Array.isArray(official?.matches) ? official.matches.length : 0;
   const officialAwardCount = Array.isArray(official?.awards) ? official.awards.length : 0;
   const officialEventPresent = Boolean(official?.event);
@@ -228,8 +319,12 @@ function buildValidationSnapshot(input: {
       'match_count',
       'Match count',
       input.tbaMatches.length,
-      Array.isArray(official?.matches) ? official.matches.length : null,
-      'Working schedule volume vs FIRST official schedule volume.',
+      comparableOfficialMatches.comparableCount,
+      comparableOfficialMatches.ignoredReasons.length
+        ? `Working schedule volume vs FIRST comparable schedule volume. ${comparableOfficialMatches.ignoredReasons.join(
+            '; ',
+          )}.`
+        : 'Working schedule volume vs FIRST comparable schedule volume.',
     ),
     createDiscrepancy(
       'ranking_count',
@@ -242,8 +337,8 @@ function buildValidationSnapshot(input: {
       'award_count',
       'Awards',
       input.tbaAwards.length,
-      Array.isArray(official?.awards) ? official.awards.length : null,
-      'Working award count vs FIRST official awards count.',
+      comparableOfficialAwards,
+      'Working award count vs grouped FIRST awards. FIRST award rows are normalized by award identity because FIRST returns one row per recipient while TBA groups recipients under one award.',
     ),
   ];
 

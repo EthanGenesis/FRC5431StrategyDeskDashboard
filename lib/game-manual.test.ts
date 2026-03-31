@@ -19,6 +19,24 @@ const MANUAL_FIXTURE = `
 </html>
 `;
 
+const WORD_SECTION_FIXTURE = `
+<html>
+  <body>
+    <p class="MsoToc1"><a href="#_Toc10">10 Tournament</a></p>
+    <div class="WordSection1">
+      <div>
+        <h1><a name="_Toc10"></a>10 Tournament</h1>
+      </div>
+      <p>Playoff rules live here.</p>
+      <div>
+        <h2><a name="_Toc10a"></a>10.1 Bracket</h2>
+      </div>
+      <p>Bracket details live here.</p>
+    </div>
+  </body>
+</html>
+`;
+
 describe('game-manual helpers', () => {
   it('decodes macintosh-encoded buffers', () => {
     const decoded = decodeGameManualBuffer(Uint8Array.from([0x54, 0x8e, 0x73, 0x74]).buffer);
@@ -39,5 +57,23 @@ describe('game-manual helpers', () => {
       'https://firstfrc.blob.core.windows.net/frc2026/Manual/HTML/2026GameManual_files/image001.jpg',
     );
     expect(snapshot.sections[1]?.text).toContain('ARENA has dimensions');
+  });
+
+  it('parses word-section wrapped headings from the real manual structure', () => {
+    const snapshot = parseGameManualHtml(WORD_SECTION_FIXTURE, null);
+
+    expect(snapshot.sections).toHaveLength(2);
+    expect(snapshot.sections[0]).toMatchObject({
+      id: '_Toc10',
+      title: '10 Tournament',
+      number: '10',
+    });
+    expect(snapshot.sections[0]?.text).toContain('Playoff rules live here.');
+    expect(snapshot.sections[1]).toMatchObject({
+      id: '_Toc10a',
+      title: '10.1 Bracket',
+      number: '10.1',
+    });
+    expect(snapshot.sections[1]?.text).toContain('Bracket details live here.');
   });
 });
