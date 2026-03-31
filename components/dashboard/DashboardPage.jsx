@@ -128,31 +128,71 @@ function averageNullable(values) {
   if (!cleaned.length) return null;
   return mean(cleaned);
 }
+function normalizeNonNegativeInteger(value) {
+  const numeric = Math.max(0, Math.floor(Number(value) || 0));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+function multiplyDecimalStringByInt(value, multiplier) {
+  const factor = normalizeNonNegativeInteger(multiplier);
+  if (factor === 0 || value === '0') return '0';
+  let carry = 0;
+  let out = '';
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const digit = Number(value[index] ?? 0);
+    const product = digit * factor + carry;
+    out = String(product % 10) + out;
+    carry = Math.floor(product / 10);
+  }
+  while (carry > 0) {
+    out = String(carry % 10) + out;
+    carry = Math.floor(carry / 10);
+  }
+  return out.replace(/^0+(?=\d)/, '');
+}
+function divideDecimalStringByInt(value, divisor) {
+  const normalizedDivisor = normalizeNonNegativeInteger(divisor);
+  if (normalizedDivisor <= 0) return '0';
+  let remainder = 0;
+  let out = '';
+  for (const character of value) {
+    const digit = Number(character ?? 0);
+    const next = remainder * 10 + digit;
+    const quotientDigit = Math.floor(next / normalizedDivisor);
+    remainder = next % normalizedDivisor;
+    if (out || quotientDigit > 0) out += String(quotientDigit);
+  }
+  return out || '0';
+}
 function permutationCount(n, k) {
   const total = Math.max(0, Math.floor(Number(n) || 0));
   const picked = Math.max(0, Math.floor(Number(k) || 0));
-  if (!total || !picked || picked > total) return 0n;
-  let out = 1n;
+  if (!total || !picked || picked > total) return '0';
+  let out = '1';
   for (let index = 0; index < picked; index += 1) {
-    out *= BigInt(total - index);
+    out = multiplyDecimalStringByInt(out, total - index);
   }
   return out;
 }
 function combinationCount(n, k) {
   const total = Math.max(0, Math.floor(Number(n) || 0));
   const picked = Math.max(0, Math.floor(Number(k) || 0));
-  if (!total || !picked || picked > total) return 0n;
+  if (!total || !picked || picked > total) return '0';
   const effectivePicked = Math.min(picked, total - picked);
-  let numerator = 1n;
-  let denominator = 1n;
+  let numerator = '1';
   for (let index = 1; index <= effectivePicked; index += 1) {
-    numerator *= BigInt(total - effectivePicked + index);
-    denominator *= BigInt(index);
+    numerator = multiplyDecimalStringByInt(numerator, total - effectivePicked + index);
+    numerator = divideDecimalStringByInt(numerator, index);
   }
-  return numerator / denominator;
+  return numerator;
 }
 function formatBigInt(value) {
-  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const normalized =
+    typeof value === 'string'
+      ? value
+      : Number.isFinite(Number(value))
+        ? String(Math.max(0, Math.floor(Number(value))))
+        : '0';
+  return normalized.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 function normalizeEventKey(value) {
   return String(value ?? '')
@@ -7441,7 +7481,7 @@ export default function HomePage() {
               {`Current event space: ${formatBigInt(monteCarloScenarioSpace.orderedCount)} ordered top-${monteCarloScenarioSpace.depth} configurations (${formatBigInt(monteCarloScenarioSpace.unorderedCount)} unordered membership sets).`}
             </div>
             <div className="muted" style={{ marginBottom: 8 }}>
-              {`This run observed ${formatBigInt(BigInt(monteCarloProjection.uniqueScenarioCount ?? 0))} unique top-${MONTE_CARLO_SCENARIO_DEPTH} scenarios across ${simRuns.toLocaleString()} simulations.`}
+              {`This run observed ${formatBigInt(monteCarloProjection.uniqueScenarioCount ?? 0)} unique top-${MONTE_CARLO_SCENARIO_DEPTH} scenarios across ${simRuns.toLocaleString()} simulations.`}
             </div>
             <div style={{ overflow: 'auto', maxHeight: 300 }}>
               <table
