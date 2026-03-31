@@ -827,6 +827,7 @@ export default function HomePage() {
     [preferredYouTubeWebcast],
   );
   const currentEventName = snapshot?.tba?.event?.name ?? loadedEventKey ?? 'Current event';
+  const inlineWebcastAnchorRef = useRef(null);
   const [webcastPlayerState, setWebcastPlayerState] = useState({
     videoId: null,
     ready: false,
@@ -836,6 +837,7 @@ export default function HomePage() {
     suppressed: false,
     errorText: '',
   });
+  const [inlineWebcastInView, setInlineWebcastInView] = useState(true);
   const officialCounts = sourceValidation?.officialCounts ?? null;
   const firstZeroCounts =
     sourceValidation?.firstStatus === 'error' &&
@@ -864,13 +866,22 @@ export default function HomePage() {
     window.sessionStorage.getItem('tbsb_webcast_closed_event') === loadedEventKey;
   const webcastPlaybackSuppressed =
     webcastPlayerState.suppressed || Boolean(persistedWebcastSuppressed);
+  const showScrollPictureInPicture = Boolean(
+    isNowTab &&
+    preferredYouTubeVideoId &&
+    webcastPlayerState.playbackState === 'playing' &&
+    !webcastPlaybackSuppressed &&
+    !inlineWebcastInView,
+  );
   const showFloatingWebcast = Boolean(
     preferredYouTubeVideoId &&
-    webcastPlayerState.floatingVisible &&
-    !isNowTab &&
-    !webcastPlaybackSuppressed,
+    !webcastPlaybackSuppressed &&
+    webcastPlayerState.playbackState === 'playing' &&
+    (showScrollPictureInPicture || !isNowTab),
   );
-  const showInlineWebcast = Boolean(isNowTab && preferredYouTubeVideoId);
+  const showInlineWebcast = Boolean(
+    isNowTab && preferredYouTubeVideoId && !showScrollPictureInPicture,
+  );
   const pitAddressRows = useMemo(() => {
     const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
       teamNumber: Number(teamNumber),
@@ -1163,7 +1174,45 @@ export default function HomePage() {
         floatingVisible: true,
       };
     });
-  }, [isNowTab, preferredYouTubeVideoId, webcastPlaybackSuppressed]);
+  }, [
+    isNowTab,
+    preferredYouTubeVideoId,
+    webcastPlaybackSuppressed,
+    webcastPlayerState.playbackState,
+  ]);
+  useEffect(() => {
+    if (!isNowTab || !preferredYouTubeVideoId) {
+      setInlineWebcastInView(true);
+      return undefined;
+    }
+
+    const node = inlineWebcastAnchorRef.current;
+    if (
+      !node ||
+      typeof window === 'undefined' ||
+      typeof window.IntersectionObserver === 'undefined'
+    ) {
+      setInlineWebcastInView(true);
+      return undefined;
+    }
+
+    const observer = new window.IntersectionObserver(
+      ([entry]) => {
+        const nextVisible =
+          Boolean(entry?.isIntersecting) && Number(entry?.intersectionRatio ?? 0) >= 0.45;
+        setInlineWebcastInView((prev) => (prev === nextVisible ? prev : nextVisible));
+      },
+      {
+        threshold: [0, 0.15, 0.45, 0.7],
+        rootMargin: '0px 0px -48px 0px',
+      },
+    );
+
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isNowTab, preferredYouTubeVideoId]);
   const handleInlineWebcastPlayIntent = useCallback(() => {
     if (typeof window !== 'undefined') {
       window.sessionStorage.removeItem('tbsb_webcast_closed_event');
@@ -1192,7 +1241,7 @@ export default function HomePage() {
         errorText: nextSnapshot?.errorText ?? '',
       };
 
-      if (playbackState === 'ended') {
+      if (playbackState !== 'playing') {
         nextState.floatingVisible = false;
       }
       if (prev.suppressed) {
@@ -1222,10 +1271,6 @@ export default function HomePage() {
       suppressed: true,
     }));
   }, [loadedEventKey]);
-  const handleReturnToNow = useCallback(() => {
-    setMajorTab('CURRENT');
-    setCurrentSubTab('NOW');
-  }, []);
   useEffect(() => {
     const saved = loadSettings();
     const restoredTeam = Math.max(
@@ -4884,7 +4929,7 @@ export default function HomePage() {
                 </div>
                 <div className="panel" style={{ padding: 16 }}>
                   <div style={{ fontWeight: 900, marginBottom: 10 }}>Live Webcast</div>
-                  {showInlineWebcast ? (
+                  {preferredYouTubeVideoId ? (
                     <div className="stack-8">
                       <div className="muted">
                         Watch the preferred webcast directly in NOW. If it is actively playing and
@@ -4920,20 +4965,34 @@ export default function HomePage() {
                           </div>
                         </div>
                       ) : (
-                        <YouTubeWebcastPlayer
-                          key={`now-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
-                          webcast={preferredYouTubeWebcast}
-                          eventKey={loadedEventKey}
-                          eventName={currentEventName}
-                          variant="inline"
-                          initialTimeSeconds={webcastPlayerState.currentTime}
-                          shouldAutoplay={
-                            webcastPlayerState.playbackState === 'playing' &&
-                            !webcastPlaybackSuppressed
-                          }
-                          onPlayIntent={handleInlineWebcastPlayIntent}
-                          onSnapshotChange={handleWebcastSnapshotChange}
-                        />
+                        <div
+                          ref={inlineWebcastAnchorRef}
+                          data-webcast-inline-anchor="true"
+                          className="webcast-inline-anchor"
+                        >
+                          {showInlineWebcast ? (
+                            <YouTubeWebcastPlayer
+                              key={`now-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
+                              webcast={preferredYouTubeWebcast}
+                              eventKey={loadedEventKey}
+                              eventName={currentEventName}
+                              variant="inline"
+                              initialTimeSeconds={webcastPlayerState.currentTime}
+                              shouldAutoplay={
+                                webcastPlayerState.playbackState === 'playing' &&
+                                !webcastPlaybackSuppressed
+                              }
+                              onSnapshotChange={handleWebcastSnapshotChange}
+                            />
+                          ) : (
+                            <div className="webcast-pip-placeholder">
+                              <div style={{ fontWeight: 800 }}>Webcast is floating</div>
+                              <div className="muted" style={{ fontSize: 12 }}>
+                                Scroll back to the webcast or use the floating player.
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ) : preferredWebcast?.url ? (
@@ -10093,7 +10152,6 @@ export default function HomePage() {
                     }
                     onSnapshotChange={handleWebcastSnapshotChange}
                     onClose={handleFloatingWebcastClose}
-                    onReturnToNow={handleReturnToNow}
                   />
                 </div>
               </div>

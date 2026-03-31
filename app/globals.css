@@ -1224,15 +1224,35 @@ textarea:focus-visible {
 
 .webcast-player-shell {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
-.webcast-player-header {
+.webcast-player-shell-inline {
+  gap: 8px;
+}
+
+.webcast-pip-toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+  gap: 10px;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.webcast-pip-meta {
+  min-width: 0;
+}
+
+.webcast-pip-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.webcast-pip-status {
+  margin-top: 2px;
+  color: var(--text-soft);
+  font-size: 11px;
 }
 
 .webcast-player-frame {
@@ -1254,11 +1274,17 @@ textarea:focus-visible {
   height: 100%;
 }
 
-.webcast-player-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
+.webcast-inline-anchor {
+  display: grid;
+}
+
+.webcast-pip-placeholder {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px dashed color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
 }
 
 .webcast-floating-shell {

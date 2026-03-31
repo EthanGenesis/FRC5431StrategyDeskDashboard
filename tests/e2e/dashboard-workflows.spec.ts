@@ -734,6 +734,11 @@ async function mockDashboardApis(page: Page) {
           ).__mockYoutubePlayersCreated =
             ((window as Window & { __mockYoutubePlayersCreated?: number })
               .__mockYoutubePlayersCreated ?? 0) + 1;
+          (
+            window as Window & {
+              __mockYoutubePlayers?: MockYouTubePlayer[];
+            }
+          ).__mockYoutubePlayers?.push(this);
           window.setTimeout(() => {
             options?.events?.onReady?.({ target: this });
           }, 0);
@@ -785,9 +790,11 @@ async function mockDashboardApis(page: Page) {
           Player: typeof MockYouTubePlayer;
         };
         __mockYoutubePlayersCreated?: number;
+        __mockYoutubePlayers?: MockYouTubePlayer[];
       };
 
       win.__mockYoutubePlayersCreated = 0;
+      win.__mockYoutubePlayers = [];
 
       win.YT = {
         PlayerState: {
@@ -854,6 +861,51 @@ async function loadMockedDeskState(page: Page) {
   await expect(statusStrip).not.toContainText('Waiting for first load');
 }
 
+async function startMockWebcastPlayback(page: Page) {
+  await page.evaluate(() => {
+    const players = (
+      window as Window & {
+        __mockYoutubePlayers?: { playVideo?: () => void }[];
+      }
+    ).__mockYoutubePlayers;
+    players?.[players.length - 1]?.playVideo?.();
+  });
+}
+
+async function pauseMockWebcastPlayback(page: Page) {
+  await page.evaluate(() => {
+    const players = (
+      window as Window & {
+        __mockYoutubePlayers?: { pauseVideo?: () => void }[];
+      }
+    ).__mockYoutubePlayers;
+    players?.[players.length - 1]?.pauseVideo?.();
+  });
+}
+
+async function waitForMockWebcastState(page: Page, expectedState: number) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const players = (
+          window as Window & {
+            __mockYoutubePlayers?: { getPlayerState?: () => number }[];
+          }
+        ).__mockYoutubePlayers;
+        return players?.[players.length - 1]?.getPlayerState?.() ?? null;
+      });
+    })
+    .toBe(expectedState);
+}
+
+async function scrollInlineWebcastIntoView(page: Page) {
+  const anchor = page.locator('[data-webcast-inline-anchor="true"]');
+  await anchor.waitFor({ state: 'attached' });
+  await anchor.evaluate((node) => {
+    node.scrollIntoView({ block: 'center' });
+  });
+}
+
 test('match to strategy workflow is preserved', async ({ page }) => {
   await loadMockedDeskState(page);
 
@@ -877,7 +929,7 @@ test('now tab surfaces priority alliance-selection prompts', async ({ page }) =>
   await expect(page.getByText('Live Desk Prompt').first()).toBeVisible();
   await expect(page.getByText('Send your rep.').first()).toBeVisible();
   await expect(page.getByText('Live Webcast')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Play Webcast' })).toBeVisible();
+  await expect(page.getByLabel('Embedded Webcast Player')).toBeVisible();
 });
 
 test('team profile and compare workflows are preserved', async ({ page }) => {
@@ -939,22 +991,23 @@ test('event tab exposes ops, validation, media, and external tool surfaces', asy
 test('active webcast docks into a floating mini-player outside NOW', async ({ page }) => {
   await loadMockedDeskState(page);
 
-  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
   await page.getByRole('button', { name: 'EVENT', exact: true }).click();
 
   await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Return to NOW' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Return to NOW' }).click();
-  await expect(page.getByRole('button', { name: 'Play Webcast' })).toBeVisible();
-  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Exit PiP' })).toBeVisible();
 });
 
 test('paused webcast does not start the floating mini-player on tab change', async ({ page }) => {
   await loadMockedDeskState(page);
 
-  await page.getByRole('button', { name: 'Play Webcast' }).click();
-  await page.getByRole('button', { name: 'Pause Webcast' }).click();
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
+  await pauseMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 2);
   await page.getByRole('button', { name: 'EVENT', exact: true }).click();
 
   await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
@@ -963,18 +1016,51 @@ test('paused webcast does not start the floating mini-player on tab change', asy
 test('embedded webcast player stays mounted during steady playback', async ({ page }) => {
   await loadMockedDeskState(page);
 
+  await scrollInlineWebcastIntoView(page);
   await expect(page.getByLabel('Embedded Webcast Player')).toBeVisible();
   await expect(page.locator('[data-mock-youtube-player="true"]')).toHaveCount(1);
 
-  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  const baselinePlayerCreateCount = await page.evaluate(
+    () => (window as Window & { __mockYoutubePlayersCreated?: number }).__mockYoutubePlayersCreated,
+  );
+
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
   await page.waitForTimeout(1200);
 
   const playerCreateCount = await page.evaluate(
     () => (window as Window & { __mockYoutubePlayersCreated?: number }).__mockYoutubePlayersCreated,
   );
+  const latestPlayerState = await page.evaluate(() => {
+    const players = (
+      window as Window & {
+        __mockYoutubePlayers?: { getPlayerState?: () => number }[];
+      }
+    ).__mockYoutubePlayers;
+    return players?.[players.length - 1]?.getPlayerState?.() ?? null;
+  });
 
-  expect(playerCreateCount).toBe(1);
-  await expect(page.getByLabel('Embedded Webcast Player')).toContainText('Playing');
+  expect(playerCreateCount).toBe(baselinePlayerCreateCount);
+  expect(latestPlayerState).toBe(1);
+});
+
+test('playing webcast floats inside NOW when scrolled away', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
+  await page.waitForTimeout(200);
+
+  await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await scrollInlineWebcastIntoView(page);
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+  await expect(page.getByLabel('Embedded Webcast Player')).toBeVisible();
 });
 
 test('closing the floating mini-player keeps it dismissed until playback restarts', async ({
@@ -982,11 +1068,13 @@ test('closing the floating mini-player keeps it dismissed until playback restart
 }) => {
   await loadMockedDeskState(page);
 
-  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
   await page.getByRole('button', { name: 'EVENT', exact: true }).click();
   await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Close Mini-Player' }).click();
+  await page.getByRole('button', { name: 'Exit PiP' }).click();
   await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'NOW', exact: true }).click();

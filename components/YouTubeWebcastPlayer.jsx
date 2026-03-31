@@ -77,9 +77,7 @@ export default function YouTubeWebcastPlayer({
   initialTimeSeconds = 0,
   shouldAutoplay = false,
   onSnapshotChange,
-  onPlayIntent,
   onClose,
-  onReturnToNow,
 }) {
   const hostRef = useRef(null);
   const playerRef = useRef(null);
@@ -91,7 +89,6 @@ export default function YouTubeWebcastPlayer({
   const [errorText, setErrorText] = useState('');
   const videoId = useMemo(() => getYouTubeVideoIdFromWebcast(webcast), [webcast]);
   const displayLabel = eventName || 'Event webcast';
-  const playerUrl = webcast?.url ?? webcast?.embedUrl ?? null;
   const readyRef = useRef(false);
   const currentTimeRef = useRef(Math.max(0, Number(initialTimeSeconds) || 0));
   const playerStateRef = useRef('unstarted');
@@ -255,7 +252,7 @@ export default function YouTubeWebcastPlayer({
         const nextTime = Number(currentPlayer.getCurrentTime() ?? 0);
         emitSnapshot({
           currentTime: Number.isFinite(nextTime) ? nextTime : currentTimeRef.current,
-          playbackState: mapPlayerState(currentPlayer.getPlayerState?.()),
+          playbackState: playerStateRef.current,
         });
       }
       currentPlayer?.destroy?.();
@@ -270,22 +267,6 @@ export default function YouTubeWebcastPlayer({
     syncFromPlayer,
     videoId,
   ]);
-
-  const playVideo = useCallback(() => {
-    onPlayIntent?.();
-    playerRef.current?.playVideo?.();
-  }, [onPlayIntent]);
-
-  const pauseVideo = useCallback(() => {
-    playerRef.current?.pauseVideo?.();
-  }, []);
-
-  const restartVideo = useCallback(() => {
-    if (!playerRef.current?.seekTo) return;
-    onPlayIntent?.();
-    playerRef.current.seekTo(0, true);
-    playerRef.current.playVideo?.();
-  }, [onPlayIntent]);
 
   const closeFloatingPlayer = useCallback(() => {
     if (typeof window !== 'undefined') {
@@ -315,28 +296,30 @@ export default function YouTubeWebcastPlayer({
       className={`webcast-player-shell webcast-player-shell-${variant}`}
       aria-label={variant === 'floating' ? 'Floating Webcast Player' : 'Embedded Webcast Player'}
     >
-      <div className="webcast-player-header">
-        <div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {variant === 'floating' ? 'Floating webcast' : 'Preferred webcast'}
+      {variant === 'floating' ? (
+        <div className="webcast-pip-toolbar">
+          <div className="webcast-pip-meta">
+            <div className="webcast-pip-label">{displayLabel}</div>
+            <div className="webcast-pip-status">
+              {playerState === 'playing'
+                ? 'Playing'
+                : playerState === 'paused'
+                  ? 'Paused'
+                  : playerState === 'ended'
+                    ? 'Ended'
+                    : ready
+                      ? 'Ready'
+                      : 'Loading'}{' '}
+              · {formatWebcastTime(currentTime)}
+            </div>
           </div>
-          <div style={{ fontWeight: 900, marginTop: 4 }}>{displayLabel}</div>
+          {onClose ? (
+            <button className="button" type="button" onClick={closeFloatingPlayer}>
+              Exit PiP
+            </button>
+          ) : null}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <span className={`badge ${playerState === 'playing' ? 'badge-green' : ''}`}>
-            {playerState === 'playing'
-              ? 'Playing'
-              : playerState === 'paused'
-                ? 'Paused'
-                : playerState === 'ended'
-                  ? 'Ended'
-                  : ready
-                    ? 'Ready'
-                    : 'Loading'}
-          </span>
-          <span className="badge">{formatWebcastTime(currentTime)}</span>
-        </div>
-      </div>
+      ) : null}
 
       <div className="webcast-player-frame">
         <div ref={hostRef} className="webcast-player-host" />
@@ -347,33 +330,6 @@ export default function YouTubeWebcastPlayer({
           {errorText}
         </div>
       ) : null}
-
-      <div className="webcast-player-actions">
-        <button className="button button-primary" type="button" onClick={playVideo}>
-          Play Webcast
-        </button>
-        <button className="button" type="button" onClick={pauseVideo}>
-          Pause Webcast
-        </button>
-        <button className="button" type="button" onClick={restartVideo}>
-          Restart
-        </button>
-        {playerUrl ? (
-          <a className="button" href={playerUrl} target="_blank" rel="noreferrer">
-            Open Webcast
-          </a>
-        ) : null}
-        {variant === 'floating' && onReturnToNow ? (
-          <button className="button" type="button" onClick={onReturnToNow}>
-            Return to NOW
-          </button>
-        ) : null}
-        {variant === 'floating' && onClose ? (
-          <button className="button button-danger" type="button" onClick={closeFloatingPlayer}>
-            Close Mini-Player
-          </button>
-        ) : null}
-      </div>
     </div>
   );
 }
