@@ -5,7 +5,8 @@ type CachedEntry = {
 };
 
 const cache = new Map<string, CachedEntry>();
-const DEFAULT_FETCH_TIMEOUT_MS = 8000;
+const DEFAULT_EXTERNAL_FETCH_TIMEOUT_MS = 8000;
+const DEFAULT_INTERNAL_FETCH_TIMEOUT_MS = 25000;
 
 function trimErrorText(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 220);
@@ -44,7 +45,9 @@ function linkAbortSignals(
 }
 
 async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
-  const timeoutMs = DEFAULT_FETCH_TIMEOUT_MS;
+  const timeoutMs = /^https?:\/\//i.test(url)
+    ? DEFAULT_EXTERNAL_FETCH_TIMEOUT_MS
+    : DEFAULT_INTERNAL_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
   const unlinkAbort = linkAbortSignals(controller, init?.signal);
   const timeoutId = setTimeout(() => {
