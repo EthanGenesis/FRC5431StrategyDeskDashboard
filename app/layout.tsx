@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
+import Script from 'next/script';
 
 const uiFont = IBM_Plex_Sans({
   subsets: ['latin'],
@@ -21,6 +22,16 @@ export const metadata: Metadata = {
   description: 'Local FRC strategy desk dashboard',
 };
 
+const legacyBrowserCompatScript = `
+  (function () {
+    if (typeof globalThis === 'undefined') {
+      if (typeof self !== 'undefined') self.globalThis = self;
+      else if (typeof window !== 'undefined') window.globalThis = window;
+      else if (typeof global !== 'undefined') global.globalThis = global;
+    }
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -28,7 +39,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${uiFont.variable} ${monoFont.variable}`}>{children}</body>
+      <body className={`${uiFont.variable} ${monoFont.variable}`}>
+        <Script
+          id="legacy-browser-compat"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: legacyBrowserCompatScript }}
+        />
+        {children}
+      </body>
     </html>
   );
 }
