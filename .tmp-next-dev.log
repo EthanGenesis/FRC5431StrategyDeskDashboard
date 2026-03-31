@@ -1,0 +1,18 @@
+
+> tbsb-dashboard@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3002
+
+▲ Next.js 16.2.1 (Turbopack)
+- Local:         http://127.0.0.1:3002
+- Network:       http://127.0.0.1:3002
+- Environments: .env.local
+✓ Ready in 454ms
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3110
+- PID:          7148
+- Dir:          C:\Users\ethan\Desktop\tbsb-dashboard
+- Log:          .next\dev\logs\next-development.log
+
+Run taskkill /PID 7148 /F to stop it.
+[?25h

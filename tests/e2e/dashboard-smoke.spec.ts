@@ -2,8 +2,12 @@ import { expect, test } from '@playwright/test';
 
 test('major scope tabs and preserved troubleshooting UI are reachable', async ({ page }) => {
   const consoleMessages: string[] = [];
+  const pageErrors: string[] = [];
   page.on('console', (message) => {
     consoleMessages.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
   });
 
   await page.goto('/');
@@ -77,4 +81,28 @@ test('major scope tabs and preserved troubleshooting UI are reachable', async ({
       .filter((message) => !message.includes('Download the React DevTools'))
       .join('\n'),
   ).not.toContain('The width(0) and height(0) of chart should be greater than 0');
+  expect(pageErrors).toEqual([]);
+});
+
+test.describe('mobile boot', () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  });
+
+  test('dashboard loads without runtime page errors on phone-sized screens', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => {
+      pageErrors.push(error.message);
+    });
+
+    await page.goto('/');
+
+    await expect(page.locator('.dashboard-layout')).toBeVisible();
+    await expect(page.locator('.dashboard-live-clock')).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  });
 });

@@ -651,7 +651,7 @@ export default function HomePage() {
   const [teamSearch, setTeamSearch] = useState('');
   const [eventSortMode, setEventSortMode] = useState('rank');
   const [eventAfterQualInput, setEventAfterQualInput] = useState('0');
-  const [nowMs, setNowMs] = useState(Date.now());
+  const [nowMs, setNowMs] = useState(0);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioStatusText, setAudioStatusText] = useState('');
   const [settingsRawPayloadOpen, setSettingsRawPayloadOpen] = useState(false);
@@ -1494,6 +1494,7 @@ export default function HomePage() {
     return () => window.clearTimeout(id);
   }, [activeWorkspaceKey, hydratedWorkspaceKey, savedPlayoffResults, sharedWorkspaceReady]);
   useEffect(() => {
+    setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);

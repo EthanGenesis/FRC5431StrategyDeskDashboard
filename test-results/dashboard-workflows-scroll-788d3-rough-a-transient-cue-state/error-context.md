@@ -1,0 +1,231 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic "Primary sections" [ref=e4]:
+        - generic [ref=e5]:
+          - generic "Strategy Desk" [ref=e6]:
+            - generic [ref=e7]: TBSB
+          - navigation "Primary sections" [ref=e8]:
+            - button "CURRENT" [pressed] [ref=e9] [cursor=pointer]:
+              - generic [ref=e10]: CURRENT
+            - button "HISTORICAL" [ref=e11] [cursor=pointer]:
+              - generic [ref=e12]: HISTORICAL
+            - button "PREDICT" [ref=e13] [cursor=pointer]:
+              - generic [ref=e14]: PREDICT
+            - button "SETTINGS" [ref=e15] [cursor=pointer]:
+              - generic [ref=e16]: SETTINGS
+          - generic [ref=e17]:
+            - generic [ref=e18]: Live
+            - generic "Live source health" [ref=e19]:
+              - generic [ref=e20]: Sync
+              - generic [ref=e21]: TBA Working
+              - generic [ref=e22]: FIRST Available
+              - generic [ref=e23]: Nexus Available
+            - generic "Test Regional" [ref=e24]:
+              - generic [ref=e25]: Test Regional
+            - generic "Current local time" [ref=e26]:
+              - text: 03:58 PM
+              - generic [ref=e27]: "|"
+              - text: Tue, Mar 31
+      - generic [ref=e28]:
+        - generic [ref=e30]:
+          - navigation "CURRENT subsections" [ref=e32]:
+            - generic [ref=e33]:
+              - button "NOW" [pressed] [ref=e34] [cursor=pointer]
+              - button "SCHEDULE" [ref=e35] [cursor=pointer]
+              - button "MATCH" [ref=e36] [cursor=pointer]
+              - button "STRATEGY" [ref=e37] [cursor=pointer]
+              - button "GAME MANUAL" [ref=e38] [cursor=pointer]
+              - button "DISTRICT" [ref=e39] [cursor=pointer]
+              - button "COMPARE" [ref=e40] [cursor=pointer]
+              - button "TEAM PROFILE" [ref=e41] [cursor=pointer]
+              - button "RANKINGS" [ref=e42] [cursor=pointer]
+              - button "PLAYOFFS" [ref=e43] [cursor=pointer]
+              - button "EVENT" [ref=e44] [cursor=pointer]
+              - button "DATA" [ref=e45] [cursor=pointer]
+          - generic [ref=e46]:
+            - spinbutton "Team" [ref=e47]: "5431"
+            - textbox "Event" [ref=e49]: 2026test
+            - button "Load" [active] [ref=e50] [cursor=pointer]
+            - button "Go Offline" [ref=e51] [cursor=pointer]
+            - button "+1 Match" [disabled] [ref=e52]
+            - button "Audio" [ref=e53] [cursor=pointer]: Audio Off
+            - generic [ref=e54]:
+              - generic [ref=e55]: Event 2026test
+              - generic [ref=e56]: Team 5431
+              - generic [ref=e57]: Poll 5s
+              - generic [ref=e58]: Updated 10:00 AM
+              - generic [ref=e59]: Queue 1 away
+        - generic [ref=e60]:
+          - button "Exit PiP" [ref=e61] [cursor=pointer]: X
+          - generic "Floating Webcast Player" [ref=e63]
+        - generic [ref=e67]:
+          - generic [ref=e68]:
+            - generic [ref=e70]:
+              - generic [ref=e71]: Current / Overview
+              - generic [ref=e72]: Overview
+            - generic [ref=e73]:
+              - generic [ref=e74]: Live Match Queue
+              - generic [ref=e75]:
+                - generic [ref=e77]: Event 2026test
+                - generic [ref=e79]: Team 5431
+                - generic [ref=e81]: Live
+                - generic [ref=e83]: Poll 5s
+                - generic [ref=e85]: FIRST Available
+                - generic [ref=e87]: Nexus Available
+                - generic [ref=e89]: Signals 2
+            - generic [ref=e90]: Monitor the next match, rival pressure, countdown context, and the few things that matter most right now.
+          - generic [ref=e92]:
+            - generic [ref=e93]:
+              - generic [ref=e94]:
+                - generic [ref=e95]: Next Match
+                - generic [ref=e96]: —
+                - generic [ref=e97]: No upcoming match found
+                - generic [ref=e98]:
+                  - generic [ref=e99]:
+                    - generic [ref=e100]: Matches Away
+                    - generic [ref=e101]: —
+                  - generic [ref=e102]:
+                    - generic [ref=e103]: Countdown
+                    - generic [ref=e104]: —
+                  - generic [ref=e105]:
+                    - generic [ref=e106]: Our Win %
+                    - generic [ref=e107]: —
+                - generic [ref=e108]:
+                  - generic [ref=e109]:
+                    - generic [ref=e110]: Predicted Score
+                    - generic [ref=e111]: "Red: — | Blue: —"
+                  - generic [ref=e112]:
+                    - generic [ref=e113]: Alliance Context
+                    - generic [ref=e114]: "Our color: — | Red — | Blue —"
+                - generic [ref=e115]:
+                  - generic [ref=e116]:
+                    - generic [ref=e117]: Loaded Team Ops
+                    - generic [ref=e118]: "Queued: Qualification 1"
+                    - generic [ref=e119]: Pit P-12 | Inspection Passed
+                  - generic [ref=e120]:
+                    - generic [ref=e121]: Bumper + Timing
+                    - generic [ref=e122]: RED | Away 0
+                    - generic [ref=e123]: Queue Mar 9, 10:00 AM
+                  - generic [ref=e124]:
+                    - generic [ref=e125]: Live Desk Prompt
+                    - generic [ref=e126]: Alliance Selection Active
+                    - generic [ref=e127]: Test Regional alliance selection is active. Send your rep.
+                - generic [ref=e128]:
+                  - generic [ref=e129]: Live Desk Prompt
+                  - generic [ref=e130]: Alliance Selection Active
+                  - generic [ref=e131]: Test Regional alliance selection is active. Send your rep.
+                - generic [ref=e133]: Next Match — Team Intel
+              - generic [ref=e134]:
+                - generic [ref=e135]:
+                  - generic [ref=e136]: Rival Band (±6 TOTAL RP)
+                  - generic [ref=e137]:
+                    - generic [ref=e138]:
+                      - generic [ref=e139]:
+                        - generic [ref=e140]: frc5431
+                        - generic [ref=e141]: Rank 1
+                      - generic [ref=e142]: TOTAL RP 1.9 | US
+                    - generic [ref=e143]:
+                      - generic [ref=e144]:
+                        - generic [ref=e145]: frc111
+                        - generic [ref=e146]: Rank 2
+                      - generic [ref=e147]: TOTAL RP 1.8
+                    - generic [ref=e148]:
+                      - generic [ref=e149]:
+                        - generic [ref=e150]: frc222
+                        - generic [ref=e151]: Rank 3
+                      - generic [ref=e152]: TOTAL RP 1.7
+                    - generic [ref=e153]:
+                      - generic [ref=e154]:
+                        - generic [ref=e155]: frc333
+                        - generic [ref=e156]: Rank 4
+                      - generic [ref=e157]: TOTAL RP 1.6
+                    - generic [ref=e158]:
+                      - generic [ref=e159]:
+                        - generic [ref=e160]: frc444
+                        - generic [ref=e161]: Rank 5
+                      - generic [ref=e162]: TOTAL RP 1.5
+                    - generic [ref=e163]:
+                      - generic [ref=e164]:
+                        - generic [ref=e165]: frc555
+                        - generic [ref=e166]: Rank 6
+                      - generic [ref=e167]: TOTAL RP 1.4
+                - generic [ref=e168]:
+                  - generic [ref=e169]: Key Matches
+                  - generic [ref=e171]: No key matches found.
+            - generic [ref=e172]:
+              - button "Live Ops Feed" [expanded] [ref=e173] [cursor=pointer]:
+                - generic [ref=e174]:
+                  - generic [ref=e176]: Live Ops Feed
+                  - generic [ref=e177]: Queue context, webhook/live signals, and webcast access for the active event.
+                - generic [ref=e178]: "-"
+              - generic [ref=e180]:
+                - generic [ref=e181]:
+                  - generic [ref=e182]:
+                    - generic [ref=e183]: Desk Ops Summary
+                    - generic [ref=e184]:
+                      - generic [ref=e185]:
+                        - generic [ref=e186]: Queue
+                        - generic [ref=e187]: Queue 1 away
+                      - generic [ref=e188]:
+                        - generic [ref=e189]: Announcements
+                        - generic [ref=e190]: "1"
+                      - generic [ref=e191]:
+                        - generic [ref=e192]: Live Signals
+                        - generic [ref=e193]: "2"
+                    - generic [ref=e194]:
+                      - generic [ref=e195]:
+                        - generic [ref=e196]: Parts Requests
+                        - generic [ref=e197]: "1"
+                      - generic [ref=e198]:
+                        - generic [ref=e199]: Inspection
+                        - generic [ref=e200]: P 20 / Pending 5 / F 1
+                  - generic [ref=e201]:
+                    - generic [ref=e203]:
+                      - generic [ref=e204]: Ops Readiness Board
+                      - generic [ref=e205]: Quick ops pressure view for queue, announcements, parts, inspections, and live signals.
+                    - application [ref=e209]:
+                      - generic [ref=e240]:
+                        - generic [ref=e241]:
+                          - generic [ref=e243]: Signals
+                          - generic [ref=e245]: Queue Away
+                          - generic [ref=e247]: Announcements
+                          - generic [ref=e249]: Parts
+                          - generic [ref=e251]: Pending Insp
+                        - generic [ref=e252]:
+                          - generic [ref=e254]: "0"
+                          - generic [ref=e256]: "2"
+                          - generic [ref=e258]: "4"
+                          - generic [ref=e260]: "6"
+                          - generic [ref=e262]: "8"
+                - generic [ref=e263]:
+                  - generic [ref=e264]:
+                    - generic [ref=e265]: Recent Event Signals
+                    - generic [ref=e266]:
+                      - generic [ref=e267]:
+                        - generic [ref=e268]:
+                          - generic [ref=e269]:
+                            - generic [ref=e270]: Alliance Selection Active
+                            - generic [ref=e271]: Test Regional alliance selection is active. Send your rep.
+                          - generic [ref=e272]: tba_webhook
+                        - generic [ref=e273]: Mar 9, 10:00 AM
+                      - generic [ref=e274]:
+                        - generic [ref=e275]:
+                          - generic [ref=e276]:
+                            - generic [ref=e277]: Upcoming match
+                            - generic [ref=e278]: 2026test_qm2
+                          - generic [ref=e279]: tba_webhook
+                        - generic [ref=e280]: Mar 9, 10:00 AM
+                  - generic [ref=e281]:
+                    - generic [ref=e282]: Live Webcast
+                    - generic [ref=e283]:
+                      - generic [ref=e284]: Watch the preferred webcast directly in NOW. If it is actively playing and you leave NOW, it will follow the desk as a floating mini-player.
+                      - generic [ref=e286]:
+                        - generic [ref=e287]: Webcast is floating
+                        - generic [ref=e288]: Scroll back to the webcast or use the floating player.
+  - alert [ref=e289]
+  - generic [ref=e290]: "0"
+```
