@@ -164,7 +164,19 @@ function normalizeTbaWebhookSignal(payload: z.infer<typeof tbaWebhookSchema>) {
   };
 }
 
-export async function POST(req: Request): Promise<NextResponse<{ ok: true } | { error: string }>> {
+type TbaWebhookOkResponse = {
+  ok: true;
+  persistence: {
+    status: string;
+    persisted: boolean;
+    detail: string | null;
+    signalId: string | null;
+  } | null;
+};
+
+export async function POST(
+  req: Request,
+): Promise<NextResponse<TbaWebhookOkResponse | { error: string }>> {
   const routeContext = beginRouteRequest('/api/webhook/tba', req);
 
   try {
@@ -185,10 +197,44 @@ export async function POST(req: Request): Promise<NextResponse<{ ok: true } | { 
 
     const normalized = normalizeTbaWebhookSignal(parsed);
     if (normalized) {
-      await appendEventLiveSignal(normalized);
+      const persistence = await appendEventLiveSignal(normalized);
+      return routeJson(
+        routeContext,
+        {
+          ok: true,
+          persistence,
+        },
+        {
+          headers: {
+            'x-tbsb-persistence-status': persistence.status,
+          },
+        },
+        {
+          eventKey: normalized.eventKey,
+          signalType: normalized.signalType,
+          persisted: persistence.persisted,
+          persistenceStatus: persistence.status,
+          persistenceDetail: persistence.detail,
+          signalId: persistence.signalId,
+        },
+      );
     }
 
-    return routeJson(routeContext, { ok: true });
+    return routeJson(
+      routeContext,
+      {
+        ok: true,
+        persistence: null,
+      },
+      {
+        headers: {
+          'x-tbsb-persistence-status': 'skipped',
+        },
+      },
+      {
+        persistenceStatus: 'skipped',
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown TBA webhook error';
     return routeErrorJson(routeContext, message, 400);

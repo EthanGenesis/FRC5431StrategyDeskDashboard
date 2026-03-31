@@ -753,6 +753,7 @@ async function loadMockedDeskState(page: Page) {
   const statusStrip = page.locator('.dashboard-status-strip');
   await expect(statusStrip.getByText(`Event ${EVENT_KEY}`)).toBeVisible();
   await expect(statusStrip.getByText('Team 5431')).toBeVisible();
+  await expect(statusStrip).not.toContainText('Waiting for first load');
 }
 
 test('match to strategy workflow is preserved', async ({ page }) => {

@@ -603,6 +603,7 @@ export default function HomePage() {
   const [loadedTeam, setLoadedTeam] = useState(null);
   const [loadedEventKey, setLoadedEventKey] = useState('');
   const [snapshot, setSnapshot] = useState(null);
+  const [lastSnapshotMeta, setLastSnapshotMeta] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [offlineMode, setOfflineMode] = useState(false);
@@ -1294,6 +1295,14 @@ export default function HomePage() {
           { cache: 'no-store' },
           'Snapshot failed',
         );
+        const generatedAtMs = Number.isFinite(Number(json?.generatedAtMs))
+          ? Number(json.generatedAtMs)
+          : Date.now();
+        setLastSnapshotMeta({
+          team: Number(team),
+          eventKey: normalizeEventKey(eventKey),
+          generatedAtMs,
+        });
         setSnapshot(json);
         if (offlineMode) {
           setOfflineMode(false);
@@ -3953,8 +3962,15 @@ export default function HomePage() {
     );
   }
   function renderTopControls() {
-    const lastUpdateText = snapshot
-      ? formatLocalizedDateTime(snapshot.generatedAtMs, language, {
+    const normalizedLoadedEventKey = normalizeEventKey(loadedEventKey);
+    const lastUpdateMs =
+      lastSnapshotMeta &&
+      Number(lastSnapshotMeta.team) === Number(loadedTeam) &&
+      normalizeEventKey(lastSnapshotMeta.eventKey) === normalizedLoadedEventKey
+        ? lastSnapshotMeta.generatedAtMs
+        : (snapshot?.generatedAtMs ?? null);
+    const lastUpdateText = lastUpdateMs
+      ? formatLocalizedDateTime(lastUpdateMs, language, {
           hour: '2-digit',
           minute: '2-digit',
         })

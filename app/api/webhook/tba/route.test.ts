@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppEnv } from '../../../../lib/env';
+import type { EventLiveSignalPersistenceResult } from '../../../../lib/source-cache-server';
 
 const envMocks = vi.hoisted(() => ({
   getAppEnv: vi.fn<() => AppEnv>(() => ({
@@ -18,7 +19,14 @@ const envMocks = vi.hoisted(() => ({
 }));
 
 const sourceCacheMocks = vi.hoisted(() => ({
-  appendEventLiveSignal: vi.fn(),
+  appendEventLiveSignal: vi.fn<() => Promise<EventLiveSignalPersistenceResult>>(() =>
+    Promise.resolve({
+      persisted: true,
+      status: 'stored',
+      detail: null,
+      signalId: 'signal-1',
+    }),
+  ),
 }));
 
 vi.mock('../../../../lib/env', () => ({
@@ -65,6 +73,15 @@ describe('/api/webhook/tba', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      persistence: {
+        persisted: true,
+        status: 'stored',
+        detail: null,
+        signalId: 'signal-1',
+      },
+    });
     expect(sourceCacheMocks.appendEventLiveSignal).toHaveBeenCalledWith(
       expect.objectContaining({
         eventKey: '2026test',
@@ -119,6 +136,7 @@ describe('/api/webhook/tba', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('x-tbsb-persistence-status')).toBe('stored');
   });
 
   it('rejects invalid X-TBA-HMAC when a webhook secret is configured', async () => {
@@ -177,6 +195,10 @@ describe('/api/webhook/tba', () => {
 
     expect(response.status).toBe(200);
     expect(sourceCacheMocks.appendEventLiveSignal).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({
+      ok: true,
+      persistence: null,
+    });
   });
 
   it('normalizes alliance selection into a desk-readable signal', async () => {
@@ -229,5 +251,41 @@ describe('/api/webhook/tba', () => {
         body: 'Send your rep to the scoring table.',
       }),
     );
+  });
+
+  it('surfaces persistence failures instead of silently indistinguishable success', async () => {
+    vi.mocked(sourceCacheMocks.appendEventLiveSignal).mockResolvedValueOnce({
+      persisted: false,
+      status: 'disabled',
+      detail: 'Server-side Supabase persistence is disabled.',
+      signalId: null,
+    });
+
+    const response = await POST(
+      new Request('http://localhost/api/webhook/tba', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message_type: 'upcoming_match',
+          webhook_id: 'disabled-1',
+          message_data: {
+            event_key: '2026test',
+            match_key: '2026test_qm1',
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-tbsb-persistence-status')).toBe('disabled');
+    expect(await response.json()).toEqual({
+      ok: true,
+      persistence: {
+        persisted: false,
+        status: 'disabled',
+        detail: 'Server-side Supabase persistence is disabled.',
+        signalId: null,
+      },
+    });
   });
 });
