@@ -5,6 +5,7 @@ type CachedEntry = {
 };
 
 const cache = new Map<string, CachedEntry>();
+const DEFAULT_FETCH_TIMEOUT_MS = 8000;
 
 function trimErrorText(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 220);
@@ -21,6 +22,51 @@ function isErrorPayload(value: unknown): value is ErrorPayload {
     'error' in value &&
     typeof value.error === 'string'
   );
+}
+
+function linkAbortSignals(
+  target: AbortController,
+  signal: AbortSignal | null | undefined,
+): (() => void) | null {
+  if (!signal) return null;
+  if (signal.aborted) {
+    target.abort(signal.reason);
+    return null;
+  }
+
+  const abort = () => {
+    target.abort(signal.reason);
+  };
+  signal.addEventListener('abort', abort, { once: true });
+  return () => {
+    signal.removeEventListener('abort', abort);
+  };
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const timeoutMs = DEFAULT_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const unlinkAbort = linkAbortSignals(controller, init?.signal);
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request timed out after ${timeoutMs}ms for ${url}`));
+  }, timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      const reason: unknown = controller.signal.reason;
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : `Request timed out after ${timeoutMs}ms for ${url}`;
+      throw new Error(message);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    unlinkAbort?.();
+  }
 }
 
 export async function readJsonResponse<T>(res: Response): Promise<T | ErrorPayload | null> {
@@ -50,7 +96,7 @@ export async function fetchJsonOrThrow<T>(
   init?: RequestInit,
   fallbackMessage = 'Request failed',
 ): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetchWithTimeout(url, init);
   const json = await readJsonResponse<T>(res);
 
   if (!res.ok) {
@@ -92,7 +138,15 @@ export async function cachedFetchJson<T>(
     headers.set('If-None-Match', existing.etag);
   }
 
-  const res = await fetch(url, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, { ...init, headers });
+  } catch (error) {
+    if (existing?.data !== undefined) {
+      return existing.data as T;
+    }
+    throw error;
+  }
 
   if (res.status === 304 && existing?.data !== undefined) {
     const maxAge = parseMaxAgeSeconds(res.headers.get('Cache-Control')) ?? defaultMaxAgeSeconds;
