@@ -883,6 +883,22 @@ async function pauseMockWebcastPlayback(page: Page) {
   });
 }
 
+async function cueMockWebcastPlayback(page: Page) {
+  await page.evaluate(() => {
+    const players = (
+      window as Window & {
+        __mockYoutubePlayers?: {
+          cueVideoById?: (payload: { videoId?: string | null; startSeconds?: number }) => void;
+        }[];
+      }
+    ).__mockYoutubePlayers;
+    players?.[players.length - 1]?.cueVideoById?.({
+      videoId: 'dQw4w9WgXcQ',
+      startSeconds: 12,
+    });
+  });
+}
+
 async function waitForMockWebcastState(page: Page, expectedState: number) {
   await expect
     .poll(async () => {
@@ -1000,6 +1016,22 @@ test('active webcast docks into a floating mini-player outside NOW', async ({ pa
   await expect(page.getByRole('button', { name: 'Exit PiP' })).toBeVisible();
 });
 
+test('floating webcast stays open through a transient cue state on tab change', async ({
+  page,
+}) => {
+  await loadMockedDeskState(page);
+
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await cueMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 5);
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+});
+
 test('paused webcast does not start the floating mini-player on tab change', async ({ page }) => {
   await loadMockedDeskState(page);
 
@@ -1061,6 +1093,24 @@ test('playing webcast floats inside NOW when scrolled away', async ({ page }) =>
   await scrollInlineWebcastIntoView(page);
   await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
   await expect(page.getByLabel('Embedded Webcast Player')).toBeVisible();
+});
+
+test('scroll-triggered webcast PiP stays open through a transient cue state', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
+  await page.waitForTimeout(200);
+
+  await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await cueMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 5);
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
 });
 
 test('closing the floating mini-player keeps it dismissed until playback restarts', async ({

@@ -346,6 +346,14 @@ function getSbEndgameEpa(teamEvent) {
   return Number.isFinite(Number(v)) ? Number(v) : null;
 }
 
+function webcastStateIsContinuing(value) {
+  return value === 'playing' || value === 'buffering';
+}
+
+function webcastStateStopsFloating(value) {
+  return value === 'paused' || value === 'ended' || value === 'error';
+}
+
 const CURRENT_TABS = [
   'NOW',
   'SCHEDULE',
@@ -866,22 +874,22 @@ export default function HomePage() {
     window.sessionStorage.getItem('tbsb_webcast_closed_event') === loadedEventKey;
   const webcastPlaybackSuppressed =
     webcastPlayerState.suppressed || Boolean(persistedWebcastSuppressed);
+  const webcastPlaybackContinuing = webcastStateIsContinuing(webcastPlayerState.playbackState);
   const showScrollPictureInPicture = Boolean(
     isNowTab &&
     preferredYouTubeVideoId &&
-    webcastPlayerState.playbackState === 'playing' &&
     !webcastPlaybackSuppressed &&
-    !inlineWebcastInView,
+    !inlineWebcastInView &&
+    (webcastPlaybackContinuing || webcastPlayerState.floatingVisible),
   );
   const showFloatingWebcast = Boolean(
     preferredYouTubeVideoId &&
     !webcastPlaybackSuppressed &&
-    webcastPlayerState.playbackState === 'playing' &&
-    (showScrollPictureInPicture || !isNowTab),
+    (showScrollPictureInPicture ||
+      webcastPlayerState.floatingVisible ||
+      (!isNowTab && webcastPlaybackContinuing)),
   );
-  const showInlineWebcast = Boolean(
-    isNowTab && preferredYouTubeVideoId && !showScrollPictureInPicture,
-  );
+  const showInlineWebcast = Boolean(isNowTab && preferredYouTubeVideoId && !showFloatingWebcast);
   const pitAddressRows = useMemo(() => {
     const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
       teamNumber: Number(teamNumber),
@@ -1160,21 +1168,30 @@ export default function HomePage() {
     if (!preferredYouTubeVideoId) return;
 
     if (isNowTab) {
-      setWebcastPlayerState((prev) =>
-        prev.floatingVisible ? { ...prev, floatingVisible: false } : prev,
-      );
+      setWebcastPlayerState((prev) => {
+        if (inlineWebcastInView) {
+          return prev.floatingVisible ? { ...prev, floatingVisible: false } : prev;
+        }
+        if (webcastPlaybackSuppressed || prev.floatingVisible) return prev;
+        if (!webcastStateIsContinuing(prev.playbackState)) return prev;
+        return {
+          ...prev,
+          floatingVisible: true,
+        };
+      });
       return;
     }
 
     setWebcastPlayerState((prev) => {
       if (webcastPlaybackSuppressed || prev.floatingVisible) return prev;
-      if (prev.playbackState !== 'playing') return prev;
+      if (!webcastStateIsContinuing(prev.playbackState)) return prev;
       return {
         ...prev,
         floatingVisible: true,
       };
     });
   }, [
+    inlineWebcastInView,
     isNowTab,
     preferredYouTubeVideoId,
     webcastPlaybackSuppressed,
@@ -1241,7 +1258,7 @@ export default function HomePage() {
         errorText: nextSnapshot?.errorText ?? '',
       };
 
-      if (playbackState !== 'playing') {
+      if (webcastStateStopsFloating(playbackState)) {
         nextState.floatingVisible = false;
       }
       if (prev.suppressed) {
@@ -4979,7 +4996,7 @@ export default function HomePage() {
                               variant="inline"
                               initialTimeSeconds={webcastPlayerState.currentTime}
                               shouldAutoplay={
-                                webcastPlayerState.playbackState === 'playing' &&
+                                (webcastPlaybackContinuing || webcastPlayerState.floatingVisible) &&
                                 !webcastPlaybackSuppressed
                               }
                               onSnapshotChange={handleWebcastSnapshotChange}
@@ -10148,7 +10165,8 @@ export default function HomePage() {
                     variant="floating"
                     initialTimeSeconds={webcastPlayerState.currentTime}
                     shouldAutoplay={
-                      webcastPlayerState.playbackState === 'playing' && !webcastPlaybackSuppressed
+                      (webcastPlaybackContinuing || webcastPlayerState.floatingVisible) &&
+                      !webcastPlaybackSuppressed
                     }
                     onSnapshotChange={handleWebcastSnapshotChange}
                     onClose={handleFloatingWebcastClose}
