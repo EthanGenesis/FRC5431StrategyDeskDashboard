@@ -36,7 +36,11 @@ function loadJson<T>(key: string, fallback: T): T {
 
 function saveJson(key: string, value: unknown) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures so compare tools still work with in-memory state.
+  }
 }
 
 function normalizeDraft(draft: CompareDraft | null | undefined): CompareDraft {

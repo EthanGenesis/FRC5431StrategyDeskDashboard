@@ -34,4 +34,19 @@ describe('settings storage', () => {
     expect(loaded.webhook.events.queue_5).toBe(false);
     expect(loaded.webhook.events.warning).toBe(true);
   });
+
+  it('does not throw when localStorage writes are blocked', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Access denied', 'SecurityError');
+    });
+
+    expect(() =>
+      saveSettings({
+        ...DEFAULT_SETTINGS,
+        themeId: 'light-slate',
+      }),
+    ).not.toThrow();
+
+    setItemSpy.mockRestore();
+  });
 });

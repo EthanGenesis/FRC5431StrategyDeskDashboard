@@ -91,5 +91,9 @@ export function loadSettings(): SettingsState {
 
 export function saveSettings(settings: SettingsState) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore storage failures so the app still loads in restrictive mobile browsers.
+  }
 }

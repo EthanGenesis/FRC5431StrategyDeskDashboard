@@ -385,6 +385,33 @@ function webcastStateStopsFloating(value) {
   return value === 'ended' || value === 'error';
 }
 
+function readSessionStorageValue(key) {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionStorageValue(key, value) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures so restrictive mobile browsers do not crash the app.
+  }
+}
+
+function removeSessionStorageValue(key) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures so restrictive mobile browsers do not crash the app.
+  }
+}
+
 function getStickyViewportTopInset() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return 0;
 
@@ -894,6 +921,7 @@ export default function HomePage() {
     errorText: '',
   });
   const [inlineWebcastInView, setInlineWebcastInView] = useState(true);
+  const [persistedWebcastSuppressed, setPersistedWebcastSuppressed] = useState(false);
   const officialCounts = sourceValidation?.officialCounts ?? null;
   const firstZeroCounts =
     sourceValidation?.firstStatus === 'error' &&
@@ -916,10 +944,6 @@ export default function HomePage() {
     [loadedTeam, nexusSnapshot],
   );
   const isNowTab = majorTab === 'CURRENT' && currentSubTab === 'NOW';
-  const persistedWebcastSuppressed =
-    typeof window !== 'undefined' &&
-    Boolean(loadedEventKey) &&
-    window.sessionStorage.getItem('tbsb_webcast_closed_event') === loadedEventKey;
   const webcastPlaybackSuppressed =
     webcastPlayerState.suppressed || Boolean(persistedWebcastSuppressed);
   const webcastPlaybackContinuing = webcastStateIsContinuing(webcastPlayerState.playbackState);
@@ -1246,6 +1270,12 @@ export default function HomePage() {
     webcastPlayerState.playbackState,
   ]);
   useEffect(() => {
+    setPersistedWebcastSuppressed(
+      Boolean(loadedEventKey) &&
+        readSessionStorageValue('tbsb_webcast_closed_event') === loadedEventKey,
+    );
+  }, [loadedEventKey]);
+  useEffect(() => {
     if (!isNowTab || !preferredYouTubeVideoId) {
       setInlineWebcastInView(true);
       return undefined;
@@ -1294,9 +1324,8 @@ export default function HomePage() {
     };
   }, [isNowTab, preferredYouTubeVideoId]);
   const handleInlineWebcastPlayIntent = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.removeItem('tbsb_webcast_closed_event');
-    }
+    removeSessionStorageValue('tbsb_webcast_closed_event');
+    setPersistedWebcastSuppressed(false);
     setWebcastPlayerState((prev) => ({
       ...prev,
       playbackState: 'playing',
@@ -1341,9 +1370,8 @@ export default function HomePage() {
     });
   }, []);
   const handleFloatingWebcastClose = useCallback(() => {
-    if (typeof window !== 'undefined' && loadedEventKey) {
-      window.sessionStorage.setItem('tbsb_webcast_closed_event', loadedEventKey);
-    }
+    if (loadedEventKey) writeSessionStorageValue('tbsb_webcast_closed_event', loadedEventKey);
+    setPersistedWebcastSuppressed(Boolean(loadedEventKey));
     setWebcastPlayerState((prev) => ({
       ...prev,
       playbackState: 'paused',

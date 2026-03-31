@@ -63,4 +63,22 @@ describe('compare draft storage', () => {
     expect(migrated.teamNumbers).toEqual([1678]);
     expect(storedDraft.teamNumbers).toEqual([1678]);
   });
+
+  it('does not throw when compare draft writes are blocked', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Access denied', 'SecurityError');
+    });
+
+    expect(() =>
+      saveCompareDraft(
+        {
+          ...DEFAULT_COMPARE_DRAFT,
+          teamNumbers: [5431],
+        },
+        'current',
+      ),
+    ).not.toThrow();
+
+    setItemSpy.mockRestore();
+  });
 });
