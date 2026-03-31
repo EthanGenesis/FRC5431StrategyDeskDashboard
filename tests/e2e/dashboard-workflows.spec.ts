@@ -703,6 +703,94 @@ async function mockDashboardApis(page: Page) {
 
   await page.addInitScript(
     ({ eventKey, teamNumber }) => {
+      type MockYouTubePlayerOptions = {
+        videoId?: string | null;
+        events?: {
+          onReady?: (event: { target: MockYouTubePlayer }) => void;
+          onStateChange?: (event: { data: number; target: MockYouTubePlayer }) => void;
+        };
+      };
+
+      class MockYouTubePlayer {
+        element: Element;
+        options: MockYouTubePlayerOptions;
+        currentTime: number;
+        state: number;
+        timer: number | null;
+        videoId: string | null;
+
+        constructor(element: Element, options: MockYouTubePlayerOptions) {
+          this.element = element;
+          this.options = options;
+          this.currentTime = 0;
+          this.state = -1;
+          this.timer = null;
+          this.videoId = options?.videoId ?? null;
+          this.element.setAttribute('data-mock-youtube-player', 'true');
+          window.setTimeout(() => {
+            options?.events?.onReady?.({ target: this });
+          }, 0);
+        }
+
+        destroy() {
+          if (this.timer) window.clearInterval(this.timer);
+          this.timer = null;
+        }
+
+        getCurrentTime() {
+          return this.currentTime;
+        }
+
+        getPlayerState() {
+          return this.state;
+        }
+
+        playVideo() {
+          this.state = 1;
+          this.timer ??= window.setInterval(() => {
+            this.currentTime += 0.5;
+          }, 500);
+          this.options?.events?.onStateChange?.({ data: 1, target: this });
+        }
+
+        pauseVideo() {
+          this.state = 2;
+          if (this.timer) window.clearInterval(this.timer);
+          this.timer = null;
+          this.options?.events?.onStateChange?.({ data: 2, target: this });
+        }
+
+        seekTo(nextTime: number) {
+          this.currentTime = Number(nextTime) || 0;
+        }
+
+        cueVideoById(payload: { videoId?: string | null; startSeconds?: number }) {
+          this.videoId = payload?.videoId ?? this.videoId;
+          this.currentTime = Number(payload?.startSeconds) || 0;
+          this.state = 5;
+          this.options?.events?.onStateChange?.({ data: 5, target: this });
+        }
+      }
+
+      const win = window as Window & {
+        YT?: {
+          PlayerState: Record<string, number>;
+          Player: typeof MockYouTubePlayer;
+        };
+      };
+
+      win.YT = {
+        PlayerState: {
+          UNSTARTED: -1,
+          ENDED: 0,
+          PLAYING: 1,
+          PAUSED: 2,
+          BUFFERING: 3,
+          CUED: 5,
+        },
+        Player: MockYouTubePlayer,
+      };
+
       window.localStorage.clear();
       window.localStorage.setItem(
         'tbsb_dashboard_settings_v1',
@@ -778,6 +866,8 @@ test('now tab surfaces priority alliance-selection prompts', async ({ page }) =>
 
   await expect(page.getByText('Live Desk Prompt').first()).toBeVisible();
   await expect(page.getByText('Send your rep.').first()).toBeVisible();
+  await expect(page.getByText('Live Webcast')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Play Webcast' })).toBeVisible();
 });
 
 test('team profile and compare workflows are preserved', async ({ page }) => {
@@ -834,6 +924,52 @@ test('event tab exposes ops, validation, media, and external tool surfaces', asy
   await expect(page.getByText('1 official discrepancy')).toBeVisible();
   await expect(page.getByText('Pit Addresses')).toBeVisible();
   await expect(page.getByText('Inspection Board')).toBeVisible();
+});
+
+test('active webcast docks into a floating mini-player outside NOW', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Return to NOW' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Return to NOW' }).click();
+  await expect(page.getByRole('button', { name: 'Play Webcast' })).toBeVisible();
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+});
+
+test('paused webcast does not start the floating mini-player on tab change', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await page.getByRole('button', { name: 'Pause Webcast' }).click();
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+});
+
+test('closing the floating mini-player keeps it dismissed until playback restarts', async ({
+  page,
+}) => {
+  await loadMockedDeskState(page);
+
+  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Close Mini-Player' }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'NOW', exact: true }).click();
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'NOW', exact: true }).click();
+  await page.getByRole('button', { name: 'Resume Webcast' }).click();
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
 });
 
 test('predict surfaces public-data alliance heuristics', async ({ page }) => {

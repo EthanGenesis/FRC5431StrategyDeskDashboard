@@ -1222,6 +1222,58 @@ textarea:focus-visible {
   resize: vertical;
 }
 
+.webcast-player-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.webcast-player-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.webcast-player-frame {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #050607;
+}
+
+.webcast-player-host {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+
+.webcast-player-host iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.webcast-player-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.webcast-floating-shell {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: min(420px, calc(100vw - 24px));
+  z-index: 70;
+}
+
+.webcast-floating-card {
+  padding: 14px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1325,6 +1377,12 @@ textarea:focus-visible {
 
   .page-header-title {
     font-size: 20px;
+  }
+
+  .webcast-floating-shell {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100vw - 20px);
   }
 }
 

@@ -12,6 +12,7 @@ import DataSuperTab from '../DataSuperTab';
 import RawPayloadExplorer from '../RawPayloadExplorer';
 import DistrictPointsTab from '../DistrictPointsTab';
 import GameManualTab from '../GameManualTab';
+import YouTubeWebcastPlayer from '../YouTubeWebcastPlayer';
 import PageHeader from '../ui/PageHeader';
 import ProductClock from '../ui/ProductClock';
 import DisclosureSection from '../ui/DisclosureSection';
@@ -29,6 +30,7 @@ import { getEventWorkspaceKey } from '../../lib/workspace-key';
 import { fetchJsonOrThrow } from '../../lib/httpCache';
 import { PERSISTENCE_TABLES } from '../../lib/persistence-surfaces';
 import { isSupabaseConfigured } from '../../lib/supabase';
+import { getYouTubeVideoIdFromWebcast, isYouTubeEmbedCapableWebcast } from '../../lib/webcast';
 import {
   allianceForTeam,
   bestCountdownUnix,
@@ -816,6 +818,24 @@ export default function HomePage() {
     () => mediaSnapshot?.webcasts?.find((entry) => entry?.embedUrl || entry?.url) ?? null,
     [mediaSnapshot],
   );
+  const preferredYouTubeWebcast = useMemo(
+    () => (isYouTubeEmbedCapableWebcast(preferredWebcast) ? preferredWebcast : null),
+    [preferredWebcast],
+  );
+  const preferredYouTubeVideoId = useMemo(
+    () => getYouTubeVideoIdFromWebcast(preferredYouTubeWebcast),
+    [preferredYouTubeWebcast],
+  );
+  const currentEventName = snapshot?.tba?.event?.name ?? loadedEventKey ?? 'Current event';
+  const [webcastPlayerState, setWebcastPlayerState] = useState({
+    videoId: null,
+    ready: false,
+    playbackState: 'unstarted',
+    currentTime: 0,
+    floatingVisible: false,
+    suppressed: false,
+    errorText: '',
+  });
   const officialCounts = sourceValidation?.officialCounts ?? null;
   const firstZeroCounts =
     sourceValidation?.firstStatus === 'error' &&
@@ -837,6 +857,20 @@ export default function HomePage() {
       deriveTeamOpsFromNexusSnapshot(nexusSnapshot, loadedTeam ?? null),
     [loadedTeam, nexusSnapshot],
   );
+  const isNowTab = majorTab === 'CURRENT' && currentSubTab === 'NOW';
+  const persistedWebcastSuppressed =
+    typeof window !== 'undefined' &&
+    Boolean(loadedEventKey) &&
+    window.sessionStorage.getItem('tbsb_webcast_closed_event') === loadedEventKey;
+  const webcastPlaybackSuppressed =
+    webcastPlayerState.suppressed || Boolean(persistedWebcastSuppressed);
+  const showFloatingWebcast = Boolean(
+    preferredYouTubeVideoId &&
+    webcastPlayerState.floatingVisible &&
+    !isNowTab &&
+    !webcastPlaybackSuppressed,
+  );
+  const showInlineWebcast = Boolean(isNowTab && preferredYouTubeVideoId);
   const pitAddressRows = useMemo(() => {
     const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
       teamNumber: Number(teamNumber),
@@ -1100,6 +1134,98 @@ export default function HomePage() {
     },
     [majorTab],
   );
+  useEffect(() => {
+    setWebcastPlayerState((prev) => ({
+      videoId: preferredYouTubeVideoId ?? null,
+      ready: false,
+      playbackState: prev.suppressed ? 'paused' : 'unstarted',
+      currentTime: prev.suppressed ? prev.currentTime : 0,
+      floatingVisible: false,
+      suppressed: prev.suppressed,
+      errorText: '',
+    }));
+  }, [loadedEventKey, preferredYouTubeVideoId]);
+  useEffect(() => {
+    if (!preferredYouTubeVideoId) return;
+
+    if (isNowTab) {
+      setWebcastPlayerState((prev) =>
+        prev.floatingVisible ? { ...prev, floatingVisible: false } : prev,
+      );
+      return;
+    }
+
+    setWebcastPlayerState((prev) => {
+      if (webcastPlaybackSuppressed || prev.floatingVisible) return prev;
+      if (prev.playbackState !== 'playing') return prev;
+      return {
+        ...prev,
+        floatingVisible: true,
+      };
+    });
+  }, [isNowTab, preferredYouTubeVideoId, webcastPlaybackSuppressed]);
+  const handleInlineWebcastPlayIntent = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem('tbsb_webcast_closed_event');
+    }
+    setWebcastPlayerState((prev) => ({
+      ...prev,
+      playbackState: 'playing',
+      floatingVisible: false,
+      suppressed: false,
+    }));
+  }, []);
+  const handleWebcastSnapshotChange = useCallback((nextSnapshot) => {
+    setWebcastPlayerState((prev) => {
+      let playbackState = nextSnapshot?.playbackState ?? prev.playbackState;
+      if (prev.suppressed && playbackState === 'playing') {
+        playbackState = 'paused';
+      }
+      const nextState = {
+        ...prev,
+        videoId: nextSnapshot?.videoId ?? prev.videoId,
+        ready: Boolean(nextSnapshot?.ready ?? prev.ready),
+        playbackState,
+        currentTime: Number.isFinite(Number(nextSnapshot?.currentTime))
+          ? Number(nextSnapshot.currentTime)
+          : prev.currentTime,
+        errorText: nextSnapshot?.errorText ?? '',
+      };
+
+      if (playbackState === 'ended') {
+        nextState.floatingVisible = false;
+      }
+      if (prev.suppressed) {
+        nextState.floatingVisible = false;
+      }
+
+      const unchanged =
+        nextState.videoId === prev.videoId &&
+        nextState.ready === prev.ready &&
+        nextState.playbackState === prev.playbackState &&
+        nextState.currentTime === prev.currentTime &&
+        nextState.floatingVisible === prev.floatingVisible &&
+        nextState.suppressed === prev.suppressed &&
+        nextState.errorText === prev.errorText;
+
+      return unchanged ? prev : nextState;
+    });
+  }, []);
+  const handleFloatingWebcastClose = useCallback(() => {
+    if (typeof window !== 'undefined' && loadedEventKey) {
+      window.sessionStorage.setItem('tbsb_webcast_closed_event', loadedEventKey);
+    }
+    setWebcastPlayerState((prev) => ({
+      ...prev,
+      playbackState: 'paused',
+      floatingVisible: false,
+      suppressed: true,
+    }));
+  }, [loadedEventKey]);
+  const handleReturnToNow = useCallback(() => {
+    setMajorTab('CURRENT');
+    setCurrentSubTab('NOW');
+  }, []);
   useEffect(() => {
     const saved = loadSettings();
     const restoredTeam = Math.max(
@@ -4757,12 +4883,64 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="panel" style={{ padding: 16 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Webcast Quick Access</div>
-                  {preferredWebcast?.url ? (
+                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Live Webcast</div>
+                  {showInlineWebcast ? (
                     <div className="stack-8">
                       <div className="muted">
-                        Launch the preferred webcast directly from NOW when the desk needs eyes on
-                        the stream.
+                        Watch the preferred webcast directly in NOW. If it is actively playing and
+                        you leave NOW, it will follow the desk as a floating mini-player.
+                      </div>
+                      {webcastPlaybackSuppressed ? (
+                        <div className="panel" style={{ padding: 16 }}>
+                          <div style={{ fontWeight: 800, marginBottom: 8 }}>
+                            Webcast paused for this desk
+                          </div>
+                          <div className="muted" style={{ marginBottom: 12 }}>
+                            The floating mini-player was closed. Resume it here when you want the
+                            webcast back on screen.
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button
+                              className="button button-primary"
+                              type="button"
+                              onClick={handleInlineWebcastPlayIntent}
+                            >
+                              Resume Webcast
+                            </button>
+                            {preferredYouTubeWebcast?.url ? (
+                              <a
+                                className="button"
+                                href={preferredYouTubeWebcast.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open Webcast
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : (
+                        <YouTubeWebcastPlayer
+                          key={`now-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
+                          webcast={preferredYouTubeWebcast}
+                          eventKey={loadedEventKey}
+                          eventName={currentEventName}
+                          variant="inline"
+                          initialTimeSeconds={webcastPlayerState.currentTime}
+                          shouldAutoplay={
+                            webcastPlayerState.playbackState === 'playing' &&
+                            !webcastPlaybackSuppressed
+                          }
+                          onPlayIntent={handleInlineWebcastPlayIntent}
+                          onSnapshotChange={handleWebcastSnapshotChange}
+                        />
+                      )}
+                    </div>
+                  ) : preferredWebcast?.url ? (
+                    <div className="stack-8">
+                      <div className="muted">
+                        This event surfaced a webcast, but it does not expose a YouTube embed that
+                        can stay in-app.
                       </div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <a
@@ -6443,28 +6621,17 @@ export default function HomePage() {
         <DisclosureSection
           storageKey="ui.current.event.media"
           title="Webcast + Media"
-          description="Preferred webcast embed plus surfaced event media from TBA."
+          description="NOW-hosted webcast access plus surfaced event media from TBA."
           defaultOpen
         >
           <div className="grid-2">
             <div className="panel" style={{ padding: 16 }}>
               <div style={{ fontWeight: 900, marginBottom: 10 }}>Preferred Webcast</div>
-              {preferredWebcast?.embedUrl ? (
+              {preferredWebcast?.url ? (
                 <div className="stack-8">
-                  <div
-                    style={{
-                      borderRadius: 14,
-                      overflow: 'hidden',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <iframe
-                      src={preferredWebcast.embedUrl}
-                      title="Preferred event webcast"
-                      style={{ width: '100%', aspectRatio: '16 / 9', border: 0, display: 'block' }}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
+                  <div className="muted">
+                    The full in-app webcast player lives in NOW. If it is actively playing and you
+                    leave NOW, the desk keeps it visible here as a floating mini-player.
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <a
@@ -6476,21 +6643,10 @@ export default function HomePage() {
                       Open Webcast
                     </a>
                     <span className="badge">{preferredWebcast.type}</span>
+                    {showFloatingWebcast ? (
+                      <span className="badge badge-green">Mini-player active</span>
+                    ) : null}
                   </div>
-                </div>
-              ) : preferredWebcast?.url ? (
-                <div className="stack-8">
-                  <div className="muted">
-                    A webcast is available for this event but does not expose an embed-safe URL.
-                  </div>
-                  <a
-                    className="button button-primary"
-                    href={preferredWebcast.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open Webcast
-                  </a>
                 </div>
               ) : (
                 <div className="muted">No webcast surfaced for the loaded event.</div>
@@ -9922,6 +10078,26 @@ export default function HomePage() {
           <div className="dashboard-main">
             {renderTopControls()}
             {renderCommandPalette()}
+            {showFloatingWebcast ? (
+              <div className="webcast-floating-shell">
+                <div className="panel webcast-floating-card">
+                  <YouTubeWebcastPlayer
+                    key={`floating-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
+                    webcast={preferredYouTubeWebcast}
+                    eventKey={loadedEventKey}
+                    eventName={currentEventName}
+                    variant="floating"
+                    initialTimeSeconds={webcastPlayerState.currentTime}
+                    shouldAutoplay={
+                      webcastPlayerState.playbackState === 'playing' && !webcastPlaybackSuppressed
+                    }
+                    onSnapshotChange={handleWebcastSnapshotChange}
+                    onClose={handleFloatingWebcastClose}
+                    onReturnToNow={handleReturnToNow}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="dashboard-content">
               <div className="dashboard-page">
                 <PageHeader
