@@ -15,6 +15,9 @@ describe('webcast helpers', () => {
       'dQw4w9WgXcQ',
     );
     expect(getYouTubeVideoIdFromUrl('https://youtu.be/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(getYouTubeVideoIdFromUrl('https://www.youtube.com/live/dQw4w9WgXcQ')).toBe(
+      'dQw4w9WgXcQ',
+    );
   });
 
   it('prefers direct webcast channel ids for youtube rows', () => {

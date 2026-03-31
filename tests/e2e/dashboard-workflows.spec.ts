@@ -727,6 +727,13 @@ async function mockDashboardApis(page: Page) {
           this.timer = null;
           this.videoId = options?.videoId ?? null;
           this.element.setAttribute('data-mock-youtube-player', 'true');
+          (
+            window as Window & {
+              __mockYoutubePlayersCreated?: number;
+            }
+          ).__mockYoutubePlayersCreated =
+            ((window as Window & { __mockYoutubePlayersCreated?: number })
+              .__mockYoutubePlayersCreated ?? 0) + 1;
           window.setTimeout(() => {
             options?.events?.onReady?.({ target: this });
           }, 0);
@@ -777,7 +784,10 @@ async function mockDashboardApis(page: Page) {
           PlayerState: Record<string, number>;
           Player: typeof MockYouTubePlayer;
         };
+        __mockYoutubePlayersCreated?: number;
       };
+
+      win.__mockYoutubePlayersCreated = 0;
 
       win.YT = {
         PlayerState: {
@@ -948,6 +958,23 @@ test('paused webcast does not start the floating mini-player on tab change', asy
   await page.getByRole('button', { name: 'EVENT', exact: true }).click();
 
   await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+});
+
+test('embedded webcast player stays mounted during steady playback', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await expect(page.getByLabel('Embedded Webcast Player')).toBeVisible();
+  await expect(page.locator('[data-mock-youtube-player="true"]')).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Play Webcast' }).click();
+  await page.waitForTimeout(1200);
+
+  const playerCreateCount = await page.evaluate(
+    () => (window as Window & { __mockYoutubePlayersCreated?: number }).__mockYoutubePlayersCreated,
+  );
+
+  expect(playerCreateCount).toBe(1);
+  await expect(page.getByLabel('Embedded Webcast Player')).toContainText('Playing');
 });
 
 test('closing the floating mini-player keeps it dismissed until playback restarts', async ({

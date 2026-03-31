@@ -30,7 +30,9 @@ export function getYouTubeVideoIdFromUrl(value: string | null | undefined): stri
       if (watchId) return watchId;
 
       const parts = url.pathname.split('/').filter(Boolean);
-      const embedSegment = parts.find((part) => part === 'embed' || part === 'shorts');
+      const embedSegment = parts.find(
+        (part) => part === 'embed' || part === 'shorts' || part === 'live',
+      );
       if (embedSegment) {
         const embedIndex = parts.indexOf(embedSegment);
         return normalizeYouTubeVideoId(parts[embedIndex + 1] ?? null);

@@ -38,8 +38,13 @@ function ensureYouTubeIframeApi() {
 
   youtubeIframeApiPromise = new Promise((resolve, reject) => {
     const existingScript = document.querySelector('script[data-tbsb-youtube-api="true"]');
+    const fail = (message) => {
+      window.clearTimeout(timeoutId);
+      youtubeIframeApiPromise = null;
+      reject(new Error(message));
+    };
     const timeoutId = window.setTimeout(() => {
-      reject(new Error('Timed out loading the YouTube IFrame API.'));
+      fail('Timed out loading the YouTube IFrame API.');
     }, 10000);
 
     const previousReady = window.onYouTubeIframeAPIReady;
@@ -55,8 +60,7 @@ function ensureYouTubeIframeApi() {
       script.async = true;
       script.setAttribute('data-tbsb-youtube-api', 'true');
       script.onerror = () => {
-        window.clearTimeout(timeoutId);
-        reject(new Error('Failed to load the YouTube IFrame API.'));
+        fail('Failed to load the YouTube IFrame API.');
       };
       document.head.appendChild(script);
     }
@@ -80,6 +84,7 @@ export default function YouTubeWebcastPlayer({
   const hostRef = useRef(null);
   const playerRef = useRef(null);
   const progressTimerRef = useRef(null);
+  const onSnapshotChangeRef = useRef(onSnapshotChange);
   const [ready, setReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(Math.max(0, Number(initialTimeSeconds) || 0));
   const [playerState, setPlayerState] = useState('unstarted');
@@ -87,28 +92,70 @@ export default function YouTubeWebcastPlayer({
   const videoId = useMemo(() => getYouTubeVideoIdFromWebcast(webcast), [webcast]);
   const displayLabel = eventName || 'Event webcast';
   const playerUrl = webcast?.url ?? webcast?.embedUrl ?? null;
+  const readyRef = useRef(false);
+  const currentTimeRef = useRef(Math.max(0, Number(initialTimeSeconds) || 0));
+  const playerStateRef = useRef('unstarted');
+  const errorTextRef = useRef('');
+  const mountConfigRef = useRef({
+    videoId,
+    startingTime: Math.max(0, Number(initialTimeSeconds) || 0),
+    shouldAutoplay: Boolean(shouldAutoplay),
+  });
+
+  useEffect(() => {
+    onSnapshotChangeRef.current = onSnapshotChange;
+  }, [onSnapshotChange]);
+
+  useEffect(() => {
+    mountConfigRef.current = {
+      videoId,
+      startingTime: Math.max(0, Number(initialTimeSeconds) || 0),
+      shouldAutoplay: Boolean(shouldAutoplay),
+    };
+  }, [initialTimeSeconds, shouldAutoplay, videoId]);
 
   const emitSnapshot = useCallback(
     (overrides = {}) => {
-      onSnapshotChange?.({
+      onSnapshotChangeRef.current?.({
         videoId,
-        ready: overrides.ready ?? ready,
-        playbackState: overrides.playbackState ?? playerState,
+        ready: overrides.ready ?? readyRef.current,
+        playbackState: overrides.playbackState ?? playerStateRef.current,
         currentTime:
-          overrides.currentTime ?? (Number.isFinite(Number(currentTime)) ? Number(currentTime) : 0),
-        errorText: overrides.errorText ?? errorText,
+          overrides.currentTime ??
+          (Number.isFinite(Number(currentTimeRef.current)) ? Number(currentTimeRef.current) : 0),
+        errorText: overrides.errorText ?? errorTextRef.current,
       });
     },
-    [currentTime, errorText, onSnapshotChange, playerState, ready, videoId],
+    [videoId],
   );
+
+  const setTrackedReady = useCallback((value) => {
+    readyRef.current = value;
+    setReady(value);
+  }, []);
+
+  const setTrackedCurrentTime = useCallback((value) => {
+    currentTimeRef.current = value;
+    setCurrentTime(value);
+  }, []);
+
+  const setTrackedPlayerState = useCallback((value) => {
+    playerStateRef.current = value;
+    setPlayerState(value);
+  }, []);
+
+  const setTrackedErrorText = useCallback((value) => {
+    errorTextRef.current = value;
+    setErrorText(value);
+  }, []);
 
   const syncFromPlayer = useCallback(() => {
     const player = playerRef.current;
     if (!player?.getCurrentTime) return;
     const nextTime = Number(player.getCurrentTime() ?? 0);
     if (!Number.isFinite(nextTime)) return;
-    setCurrentTime(nextTime);
-  }, []);
+    setTrackedCurrentTime(nextTime);
+  }, [setTrackedCurrentTime]);
 
   const clearProgressTimer = useCallback(() => {
     if (progressTimerRef.current) {
@@ -123,7 +170,7 @@ export default function YouTubeWebcastPlayer({
     }
 
     let cancelled = false;
-    const startingTime = Math.max(0, Number(initialTimeSeconds) || 0);
+    const { startingTime, shouldAutoplay: autoplayOnMount } = mountConfigRef.current;
 
     ensureYouTubeIframeApi()
       .then((YT) => {
@@ -132,7 +179,7 @@ export default function YouTubeWebcastPlayer({
         playerRef.current = new YT.Player(hostRef.current, {
           videoId,
           playerVars: {
-            autoplay: shouldAutoplay ? 1 : 0,
+            autoplay: autoplayOnMount ? 1 : 0,
             controls: 1,
             playsinline: 1,
             rel: 0,
@@ -141,11 +188,12 @@ export default function YouTubeWebcastPlayer({
           events: {
             onReady: (event) => {
               if (cancelled) return;
-              setReady(true);
+              setTrackedReady(true);
+              setTrackedErrorText('');
               emitSnapshot({ ready: true, currentTime: startingTime, errorText: '' });
 
               if (startingTime > 0) {
-                if (!shouldAutoplay && event.target?.cueVideoById) {
+                if (!autoplayOnMount && event.target?.cueVideoById) {
                   event.target.cueVideoById({
                     videoId,
                     startSeconds: startingTime,
@@ -155,7 +203,7 @@ export default function YouTubeWebcastPlayer({
                 }
               }
 
-              if (shouldAutoplay && event.target?.playVideo) {
+              if (autoplayOnMount && event.target?.playVideo) {
                 event.target.playVideo();
               }
 
@@ -167,7 +215,7 @@ export default function YouTubeWebcastPlayer({
             onStateChange: (event) => {
               if (cancelled) return;
               const nextState = mapPlayerState(event.data);
-              setPlayerState(nextState);
+              setTrackedPlayerState(nextState);
               if (nextState === 'ended') {
                 clearProgressTimer();
               }
@@ -180,7 +228,7 @@ export default function YouTubeWebcastPlayer({
             onError: (event) => {
               if (cancelled) return;
               const nextError = `YouTube player error ${event?.data ?? 'unknown'}.`;
-              setErrorText(nextError);
+              setTrackedErrorText(nextError);
               emitSnapshot({
                 errorText: nextError,
                 playbackState: 'error',
@@ -192,7 +240,7 @@ export default function YouTubeWebcastPlayer({
       .catch((error) => {
         if (cancelled) return;
         const nextError = error instanceof Error ? error.message : 'Failed to load webcast.';
-        setErrorText(nextError);
+        setTrackedErrorText(nextError);
         emitSnapshot({
           errorText: nextError,
           playbackState: 'error',
@@ -206,7 +254,7 @@ export default function YouTubeWebcastPlayer({
       if (currentPlayer?.getCurrentTime) {
         const nextTime = Number(currentPlayer.getCurrentTime() ?? 0);
         emitSnapshot({
-          currentTime: Number.isFinite(nextTime) ? nextTime : currentTime,
+          currentTime: Number.isFinite(nextTime) ? nextTime : currentTimeRef.current,
           playbackState: mapPlayerState(currentPlayer.getPlayerState?.()),
         });
       }
@@ -215,10 +263,10 @@ export default function YouTubeWebcastPlayer({
     };
   }, [
     clearProgressTimer,
-    currentTime,
     emitSnapshot,
-    initialTimeSeconds,
-    shouldAutoplay,
+    setTrackedErrorText,
+    setTrackedPlayerState,
+    setTrackedReady,
     syncFromPlayer,
     videoId,
   ]);
