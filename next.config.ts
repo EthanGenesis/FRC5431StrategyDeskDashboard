@@ -8,8 +8,22 @@ function buildContentSecurityPolicy(): string {
     : ["'self'", 'https:'];
 
   const scriptSources = isDevelopment
-    ? ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'blob:']
-    : ["'self'", "'unsafe-inline'"];
+    ? [
+        "'self'",
+        "'unsafe-inline'",
+        "'unsafe-eval'",
+        'blob:',
+        'https://www.youtube.com',
+        'https://www.youtube-nocookie.com',
+        'https://s.ytimg.com',
+      ]
+    : [
+        "'self'",
+        "'unsafe-inline'",
+        'https://www.youtube.com',
+        'https://www.youtube-nocookie.com',
+        'https://s.ytimg.com',
+      ];
 
   const directives: [string, string[]][] = [
     ['default-src', ["'self'"]],
@@ -22,6 +36,7 @@ function buildContentSecurityPolicy(): string {
     ['img-src', ["'self'", 'data:', 'blob:', 'https:']],
     ['font-src', ["'self'", 'data:']],
     ['connect-src', connectSources],
+    ['frame-src', ["'self'", 'https://www.youtube.com', 'https://www.youtube-nocookie.com']],
     ['worker-src', ["'self'", 'blob:']],
   ];
 
