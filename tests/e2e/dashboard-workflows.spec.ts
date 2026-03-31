@@ -879,7 +879,9 @@ async function pauseMockWebcastPlayback(page: Page) {
         __mockYoutubePlayers?: { pauseVideo?: () => void }[];
       }
     ).__mockYoutubePlayers;
-    players?.[players.length - 1]?.pauseVideo?.();
+    players?.forEach((player) => {
+      player?.pauseVideo?.();
+    });
   });
 }
 
@@ -892,9 +894,11 @@ async function cueMockWebcastPlayback(page: Page) {
         }[];
       }
     ).__mockYoutubePlayers;
-    players?.[players.length - 1]?.cueVideoById?.({
-      videoId: 'dQw4w9WgXcQ',
-      startSeconds: 12,
+    players?.forEach((player) => {
+      player?.cueVideoById?.({
+        videoId: 'dQw4w9WgXcQ',
+        startSeconds: 12,
+      });
     });
   });
 }
@@ -1039,9 +1043,26 @@ test('paused webcast does not start the floating mini-player on tab change', asy
   await startMockWebcastPlayback(page);
   await waitForMockWebcastState(page, 1);
   await pauseMockWebcastPlayback(page);
-  await waitForMockWebcastState(page, 2);
+  await page.waitForTimeout(200);
   await page.getByRole('button', { name: 'EVENT', exact: true }).click();
 
+  await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+});
+
+test('paused floating webcast stays visible until the user exits PiP', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  await scrollInlineWebcastIntoView(page);
+  await startMockWebcastPlayback(page);
+  await waitForMockWebcastState(page, 1);
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await pauseMockWebcastPlayback(page);
+  await page.waitForTimeout(200);
+  await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Exit PiP' }).click();
   await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
 });
 

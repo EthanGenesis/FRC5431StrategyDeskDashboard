@@ -351,7 +351,7 @@ function webcastStateIsContinuing(value) {
 }
 
 function webcastStateStopsFloating(value) {
-  return value === 'paused' || value === 'ended' || value === 'error';
+  return value === 'ended' || value === 'error';
 }
 
 const CURRENT_TABS = [
@@ -10156,6 +10156,14 @@ export default function HomePage() {
             {renderCommandPalette()}
             {showFloatingWebcast ? (
               <div className="webcast-floating-shell">
+                <button
+                  className="button webcast-floating-dismiss"
+                  type="button"
+                  aria-label="Exit PiP"
+                  onClick={handleFloatingWebcastClose}
+                >
+                  X
+                </button>
                 <div className="panel webcast-floating-card">
                   <YouTubeWebcastPlayer
                     key={`floating-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
@@ -10169,7 +10177,6 @@ export default function HomePage() {
                       !webcastPlaybackSuppressed
                     }
                     onSnapshotChange={handleWebcastSnapshotChange}
-                    onClose={handleFloatingWebcastClose}
                   />
                 </div>
               </div>

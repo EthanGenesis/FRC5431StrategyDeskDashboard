@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 
 import { getYouTubeVideoIdFromWebcast } from '../lib/webcast';
 
@@ -14,13 +13,6 @@ function mapPlayerState(code) {
   if (code === 3) return 'buffering';
   if (code === 5) return 'cued';
   return 'unstarted';
-}
-
-function formatWebcastTime(value) {
-  const totalSeconds = Math.max(0, Math.floor(Number(value) || 0));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function ensureYouTubeIframeApi() {
@@ -71,24 +63,17 @@ function ensureYouTubeIframeApi() {
 
 export default function YouTubeWebcastPlayer({
   webcast,
-  eventKey = '',
-  eventName = '',
   variant = 'inline',
   initialTimeSeconds = 0,
   shouldAutoplay = false,
   onSnapshotChange,
-  onClose,
 }) {
   const hostRef = useRef(null);
   const playerRef = useRef(null);
   const progressTimerRef = useRef(null);
   const onSnapshotChangeRef = useRef(onSnapshotChange);
-  const [ready, setReady] = useState(false);
-  const [currentTime, setCurrentTime] = useState(Math.max(0, Number(initialTimeSeconds) || 0));
-  const [playerState, setPlayerState] = useState('unstarted');
   const [errorText, setErrorText] = useState('');
   const videoId = useMemo(() => getYouTubeVideoIdFromWebcast(webcast), [webcast]);
-  const displayLabel = eventName || 'Event webcast';
   const readyRef = useRef(false);
   const currentTimeRef = useRef(Math.max(0, Number(initialTimeSeconds) || 0));
   const playerStateRef = useRef('unstarted');
@@ -128,17 +113,14 @@ export default function YouTubeWebcastPlayer({
 
   const setTrackedReady = useCallback((value) => {
     readyRef.current = value;
-    setReady(value);
   }, []);
 
   const setTrackedCurrentTime = useCallback((value) => {
     currentTimeRef.current = value;
-    setCurrentTime(value);
   }, []);
 
   const setTrackedPlayerState = useCallback((value) => {
     playerStateRef.current = value;
-    setPlayerState(value);
   }, []);
 
   const setTrackedErrorText = useCallback((value) => {
@@ -268,25 +250,6 @@ export default function YouTubeWebcastPlayer({
     videoId,
   ]);
 
-  const closeFloatingPlayer = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem('tbsb_webcast_closed_event', String(eventKey || ''));
-    }
-    const currentPlayer = playerRef.current;
-    const nextTime = Number(currentPlayer?.getCurrentTime?.() ?? currentTime);
-    currentPlayer?.pauseVideo?.();
-    emitSnapshot({
-      currentTime: Number.isFinite(nextTime) ? nextTime : currentTime,
-      playbackState: 'paused',
-      ready,
-    });
-    if (onClose) {
-      flushSync(() => {
-        onClose();
-      });
-    }
-  }, [currentTime, emitSnapshot, eventKey, onClose, ready]);
-
   if (!videoId) {
     return null;
   }
@@ -296,31 +259,6 @@ export default function YouTubeWebcastPlayer({
       className={`webcast-player-shell webcast-player-shell-${variant}`}
       aria-label={variant === 'floating' ? 'Floating Webcast Player' : 'Embedded Webcast Player'}
     >
-      {variant === 'floating' ? (
-        <div className="webcast-pip-toolbar">
-          <div className="webcast-pip-meta">
-            <div className="webcast-pip-label">{displayLabel}</div>
-            <div className="webcast-pip-status">
-              {playerState === 'playing'
-                ? 'Playing'
-                : playerState === 'paused'
-                  ? 'Paused'
-                  : playerState === 'ended'
-                    ? 'Ended'
-                    : ready
-                      ? 'Ready'
-                      : 'Loading'}{' '}
-              · {formatWebcastTime(currentTime)}
-            </div>
-          </div>
-          {onClose ? (
-            <button className="button" type="button" onClick={closeFloatingPlayer}>
-              Exit PiP
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
       <div className="webcast-player-frame">
         <div ref={hostRef} className="webcast-player-host" />
       </div>
