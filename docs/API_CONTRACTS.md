@@ -75,6 +75,22 @@ Core payload areas:
 - current loaded-event row and loaded-event match chronology
 - historical 2026 rows excluding the loaded event
 
+### `GET /api/event-search?query=...&team=...`
+
+Internal event-picker route for competition-day loading.
+
+Core behavior:
+
+- scopes to `2026` only
+- if `team` is valid, returns only that team's 2026 events from TBA
+- otherwise falls back to the global 2026 event list
+- filters by:
+  - event key
+  - short name
+  - full name
+  - location text
+- blank `query` is allowed for team-scoped lookup so the picker can show the full event list for the typed team
+
 ### `POST /api/team-compare`
 
 Body:

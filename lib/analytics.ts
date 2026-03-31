@@ -112,6 +112,99 @@ export function analyticsSafeNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
+
+function readLooseRecord(value: unknown): LooseRecord | null {
+  return typeof value === 'object' && value !== null ? (value as LooseRecord) : null;
+}
+
+function readNumericPath(record: LooseRecord | null | undefined, path: string): number | null {
+  if (!record) return null;
+  const segments = path.split('.');
+  let current: unknown = record;
+  for (const segment of segments) {
+    if (typeof current !== 'object' || current === null) return null;
+    current = (current as LooseRecord)[segment];
+  }
+  return analyticsSafeNumber(current);
+}
+
+function matchBreakdownFromSbResult(
+  result: LooseRecord | null | undefined,
+  alliance: 'red' | 'blue',
+): LooseRecord | null {
+  if (!result) return null;
+  const prefix = alliance === 'red' ? 'red' : 'blue';
+  const autoPoints = readNumericPath(result, `${prefix}_auto_points`);
+  const teleopPoints = readNumericPath(result, `${prefix}_teleop_points`);
+  const endgamePoints = readNumericPath(result, `${prefix}_endgame_points`);
+  if (autoPoints == null && teleopPoints == null && endgamePoints == null) return null;
+  return {
+    auto_points: autoPoints,
+    teleop_points: teleopPoints,
+    endgame_points: endgamePoints,
+  };
+}
+
+function matchBreakdownFromTbaScore(
+  scoreBreakdown: unknown,
+  alliance: 'red' | 'blue',
+): LooseRecord | null {
+  const allianceBreakdown = readLooseRecord(readLooseRecord(scoreBreakdown)?.[alliance]);
+  if (!allianceBreakdown) return null;
+
+  const autoPoints =
+    readNumericPath(allianceBreakdown, 'totalAutoPoints') ??
+    readNumericPath(allianceBreakdown, 'autoPoints') ??
+    readNumericPath(allianceBreakdown, 'hubScore.autoPoints');
+  const endgameFuelPoints = readNumericPath(allianceBreakdown, 'hubScore.endgamePoints');
+  const endgameTowerPoints =
+    readNumericPath(allianceBreakdown, 'endGameTowerPoints') ??
+    readNumericPath(allianceBreakdown, 'totalTowerPoints');
+  const teleopTotal =
+    readNumericPath(allianceBreakdown, 'totalTeleopPoints') ??
+    readNumericPath(allianceBreakdown, 'teleopPoints') ??
+    readNumericPath(allianceBreakdown, 'hubScore.teleopPoints');
+
+  const endgamePoints =
+    endgameFuelPoints != null || endgameTowerPoints != null
+      ? (endgameFuelPoints ?? 0) + (endgameTowerPoints ?? 0)
+      : null;
+  const teleopPoints =
+    teleopTotal != null && endgamePoints != null
+      ? Math.max(0, teleopTotal - endgamePoints)
+      : teleopTotal;
+
+  if (autoPoints == null && teleopPoints == null && endgamePoints == null) return null;
+  return {
+    auto_points: autoPoints,
+    teleop_points: teleopPoints,
+    endgame_points: endgamePoints,
+  };
+}
+
+function earnedPointsFromBreakdown(breakdown: LooseRecord | null | undefined): number | null {
+  if (!breakdown) return null;
+  const autoPoints = analyticsSafeNumber(breakdown.auto_points);
+  const teleopPoints = analyticsSafeNumber(breakdown.teleop_points);
+  const endgamePoints = analyticsSafeNumber(breakdown.endgame_points);
+  const anyPresent = autoPoints != null || teleopPoints != null || endgamePoints != null;
+  if (!anyPresent) return null;
+  return (autoPoints ?? 0) + (teleopPoints ?? 0) + (endgamePoints ?? 0);
+}
+
+function resultScoreForAlliance(
+  result: LooseRecord | null | undefined,
+  alliance: 'red' | 'blue',
+): number | null {
+  if (!result) return null;
+  const prefix = alliance === 'red' ? 'red' : 'blue';
+  return (
+    readNumericPath(result, `${prefix}_no_foul`) ??
+    readNumericPath(result, `${prefix}_score`) ??
+    null
+  );
+}
+
 export function analyticsMean(values: number[]): number | null {
   if (!values.length) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -430,6 +523,16 @@ export function normalizeEventMatches(
           : analyticsSafeNumber(match?.alliances?.red?.score);
       const sbMatch = sbMatchMap.get(match.key) ?? null;
       const sbMatchEpa = (sbMatch?.epa as LooseRecord | undefined) ?? null;
+      const sbMatchResult = readLooseRecord(sbMatch?.result);
+      const fallbackBreakdown =
+        matchBreakdownFromSbResult(sbMatchResult, alliance) ??
+        matchBreakdownFromTbaScore(match?.score_breakdown, alliance);
+      const resolvedBreakdown =
+        (sbMatchEpa?.breakdown as LooseRecord | null | undefined) ?? fallbackBreakdown ?? null;
+      const earnedPoints =
+        earnedPointsFromBreakdown(resolvedBreakdown) ??
+        resultScoreForAlliance(sbMatchResult, alliance) ??
+        myScore;
       return {
         key: String(match?.key ?? ''),
         eventKey: String((match as MatchSimple & { event_key?: string }).event_key ?? ''),
@@ -451,9 +554,9 @@ export function normalizeEventMatches(
         oppScore,
         margin: myScore != null && oppScore != null ? myScore - oppScore : null,
         winningAlliance: match?.winning_alliance ?? null,
-        epaTotal: analyticsSafeNumber(sbMatchEpa?.total_points),
+        epaTotal: analyticsSafeNumber(sbMatchEpa?.total_points) ?? earnedPoints,
         epaPost: analyticsSafeNumber(sbMatchEpa?.post),
-        breakdown: (sbMatchEpa?.breakdown as LooseRecord | null | undefined) ?? null,
+        breakdown: resolvedBreakdown,
         pred: (sbMatch?.pred as LooseRecord | null | undefined) ?? null,
         rp:
           extractKnownRpFromMatch(match, alliance) ??

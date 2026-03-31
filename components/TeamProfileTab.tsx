@@ -306,6 +306,11 @@ export default function TeamProfileTab({
             className="input"
             value={searchInput}
             onChange={(event: ChangeEvent<HTMLInputElement>) => setSearchInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              handleSearch();
+            }}
             placeholder="Search 2026 team number"
             style={{ width: 220 }}
           />

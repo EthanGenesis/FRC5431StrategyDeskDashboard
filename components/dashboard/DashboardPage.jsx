@@ -1,7 +1,7 @@
 'use client';
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_SETTINGS } from '../../lib/storage';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../../lib/storage';
 import StrategyWorkspace from '../StrategyWorkspace';
 import TeamProfileTab from '../TeamProfileTab';
 import PreEventTab from '../PreEventTab';
@@ -53,6 +53,16 @@ import {
   normalizeTranslationKey,
   translate,
 } from '../../lib/product-preferences';
+
+const EVENT_SEARCH_YEAR = 2026;
+const AUDIO_PATTERN_BY_QUEUE = {
+  QUEUE_5: [0],
+  QUEUE_2: [0, 0.18],
+  QUEUE_1: [0, 0.14, 0.28],
+  PLAYING_NOW: [0, 0.12, 0.24, 0.38],
+  TEST: [0, 0.12, 0.28],
+};
+
 function pct(value) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
   return `${Math.round(Number(value) * 100)}%`;
@@ -110,6 +120,11 @@ function combinationCount(n, k) {
 }
 function formatBigInt(value) {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function normalizeEventKey(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
 }
 function topInsightRows(rows, key) {
   return [...rows].sort((a, b) => Number(b?.[key] ?? 0) - Number(a?.[key] ?? 0)).slice(0, 3);
@@ -582,6 +597,7 @@ function isTypingTarget(target) {
 export default function HomePage() {
   const MONTE_CARLO_SCENARIO_DEPTH = 12;
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [localSettingsReady, setLocalSettingsReady] = useState(false);
   const [draftTeam, setDraftTeam] = useState(5431);
   const [draftEventKey, setDraftEventKey] = useState('');
   const [loadedTeam, setLoadedTeam] = useState(null);
@@ -608,11 +624,15 @@ export default function HomePage() {
   const [eventSortMode, setEventSortMode] = useState('rank');
   const [eventAfterQualInput, setEventAfterQualInput] = useState('0');
   const [nowMs, setNowMs] = useState(Date.now());
-  const [armedAudio, setArmedAudio] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [audioStatusText, setAudioStatusText] = useState('');
   const [settingsRawPayloadOpen, setSettingsRawPayloadOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
+  const [eventSearchOptions, setEventSearchOptions] = useState([]);
+  const [eventSearchOpen, setEventSearchOpen] = useState(false);
+  const [eventSearchLoading, setEventSearchLoading] = useState(false);
   const [webhookDelivery, setWebhookDelivery] = useState({
     pending: false,
     lastSuccessAtMs: null,
@@ -668,6 +688,9 @@ export default function HomePage() {
   const skipPickListSaveRef = useRef(false);
   const skipPlayoffSaveRef = useRef(false);
   const commandPaletteInputRef = useRef(null);
+  const eventSearchAbortRef = useRef(null);
+  const eventSearchInputRef = useRef(null);
+  const audioContextRef = useRef(null);
   const tab =
     majorTab === 'CURRENT'
       ? currentSubTab
@@ -792,6 +815,21 @@ export default function HomePage() {
     () => mediaSnapshot?.webcasts?.find((entry) => entry?.embedUrl || entry?.url) ?? null,
     [mediaSnapshot],
   );
+  const officialCounts = sourceValidation?.officialCounts ?? null;
+  const firstZeroCounts =
+    sourceValidation?.firstStatus === 'error' &&
+    officialCounts &&
+    !officialCounts.eventPresent &&
+    Number(officialCounts.rankings ?? 0) === 0 &&
+    Number(officialCounts.matches ?? 0) === 0 &&
+    Number(officialCounts.awards ?? 0) === 0;
+  const firstErrorHint = firstZeroCounts
+    ? 'FIRST error with zero official counts usually indicates production auth/config or upstream availability.'
+    : '';
+  const teamScopedEventSearch = Number.isFinite(Number(draftTeam)) && Number(draftTeam) > 0;
+  const visibleEventSearchOptions = eventSearchOptions.slice(0, 10);
+  const showEventSearchResults =
+    eventSearchOpen && (eventSearchLoading || visibleEventSearchOptions.length > 0);
   const loadedTeamOps = useMemo(
     () =>
       nexusSnapshot?.loadedTeamOps ??
@@ -856,6 +894,15 @@ export default function HomePage() {
     },
     [nexusSnapshot],
   );
+  const chooseEventSearchOption = useCallback((option) => {
+    const nextKey = normalizeEventKey(option?.key);
+    if (!nextKey) return;
+    setDraftEventKey(nextKey);
+    setEventSearchOpen(false);
+    requestAnimationFrame(() => {
+      eventSearchInputRef.current?.focus?.();
+    });
+  }, []);
   const webhookContextFields = useCallback(
     (extraFields = []) =>
       [
@@ -929,6 +976,75 @@ export default function HomePage() {
     },
     [settings.webhook, webhookContextFields],
   );
+  const handleActionInputKeyDown = useCallback((event, action) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent?.isComposing) return;
+    event.preventDefault();
+    action();
+  }, []);
+  const ensureAudioContext = useCallback(async () => {
+    if (typeof window === 'undefined') return null;
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) {
+      setAudioStatusText('Audio is not supported in this browser.');
+      return null;
+    }
+
+    try {
+      let context = audioContextRef.current;
+      if (!context) {
+        context = new AudioContextCtor();
+        audioContextRef.current = context;
+      }
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+      return context;
+    } catch (error) {
+      setAudioStatusText(error instanceof Error ? error.message : 'Audio could not start.');
+      return null;
+    }
+  }, []);
+  const playAudioPattern = useCallback(
+    async (patternKey = 'TEST', { updateStatus = false } = {}) => {
+      const context = await ensureAudioContext();
+      if (!context) return false;
+
+      const offsets = AUDIO_PATTERN_BY_QUEUE[patternKey] ?? AUDIO_PATTERN_BY_QUEUE.TEST;
+      const baseFrequency = patternKey === 'PLAYING_NOW' ? 940 : 760;
+
+      offsets.forEach((offset, index) => {
+        const startAt = context.currentTime + 0.02 + offset;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = patternKey === 'PLAYING_NOW' ? 'triangle' : 'sine';
+        oscillator.frequency.setValueAtTime(baseFrequency + index * 35, startAt);
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.09, startAt + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.12);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(startAt);
+        oscillator.stop(startAt + 0.14);
+      });
+
+      if (updateStatus) {
+        setAudioStatusText(patternKey === 'TEST' ? 'Audio test played.' : 'Audio alert is ready.');
+      }
+      return true;
+    },
+    [ensureAudioContext],
+  );
+  const toggleAudio = useCallback(async () => {
+    if (audioEnabled) {
+      setAudioEnabled(false);
+      setAudioStatusText('Audio off.');
+      return;
+    }
+    const ready = await ensureAudioContext();
+    if (!ready) return;
+    setAudioEnabled(true);
+    setAudioStatusText('Audio on.');
+  }, [audioEnabled, ensureAudioContext]);
   const setTab = useCallback(
     (nextTab) => {
       if (['NOW', 'SCHEDULE', 'MATCH'].includes(nextTab)) {
@@ -983,6 +1099,29 @@ export default function HomePage() {
     },
     [majorTab],
   );
+  useEffect(() => {
+    const saved = loadSettings();
+    const restoredTeam = Math.max(
+      1,
+      Math.floor(Number(saved.teamNumber || DEFAULT_SETTINGS.teamNumber)),
+    );
+    const restoredEventKey = normalizeEventKey(saved.eventKey);
+
+    setSettings(saved);
+    setDraftTeam(restoredTeam);
+    setDraftEventKey(restoredEventKey);
+
+    if (restoredEventKey) {
+      setLoadedTeam(restoredTeam);
+      setLoadedEventKey(restoredEventKey);
+    }
+
+    setLocalSettingsReady(true);
+  }, []);
+  useEffect(() => {
+    if (!localSettingsReady) return;
+    saveSettings(settings);
+  }, [localSettingsReady, settings]);
   useEffect(() => {
     let cancelled = false;
 
@@ -1137,6 +1276,14 @@ export default function HomePage() {
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+  useEffect(
+    () => () => {
+      if (typeof audioContextRef.current?.close === 'function') {
+        void audioContextRef.current.close().catch(() => undefined);
+      }
+    },
+    [],
+  );
   const fetchSnapshot = useCallback(
     async (team, eventKey, source = 'auto') => {
       setIsLoading(true);
@@ -1181,7 +1328,7 @@ export default function HomePage() {
   );
   function handleLoad() {
     const team = Number(draftTeam);
-    const eventKey = String(draftEventKey || '').trim();
+    const eventKey = normalizeEventKey(draftEventKey);
     if (!Number.isFinite(team) || team <= 0 || !eventKey) {
       const message = 'Enter a valid team number and event key.';
       setErrorText(message);
@@ -1192,8 +1339,16 @@ export default function HomePage() {
       );
       return;
     }
+    setDraftTeam(team);
+    setDraftEventKey(eventKey);
     setLoadedTeam(team);
     setLoadedEventKey(eventKey);
+    setSettings((prev) => ({
+      ...prev,
+      teamNumber: team,
+      eventKey,
+    }));
+    setEventSearchOpen(false);
     setSelectedMatchKey(null);
     setSelectedTeamNumber(null);
     setStrategyTarget(null);
@@ -1202,6 +1357,55 @@ export default function HomePage() {
     setPredictOverrides({});
     fetchSnapshot(team, eventKey, 'manual');
   }
+  useEffect(() => {
+    const query = String(draftEventKey || '').trim();
+    const teamNumber = Math.floor(Number(draftTeam));
+    const hasTeamScope = Number.isFinite(teamNumber) && teamNumber > 0;
+    const shouldSearch = eventSearchOpen && (query.length >= 2 || hasTeamScope);
+    if (!shouldSearch) {
+      setEventSearchOptions([]);
+      setEventSearchLoading(false);
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      eventSearchAbortRef.current?.abort?.();
+      const controller = new AbortController();
+      eventSearchAbortRef.current = controller;
+      setEventSearchLoading(true);
+
+      try {
+        const params = new URLSearchParams({
+          query,
+        });
+        if (Number.isFinite(teamNumber) && teamNumber > 0) {
+          params.set('team', String(teamNumber));
+        }
+        const result = await fetchJsonOrThrow(
+          `/api/event-search?${params.toString()}`,
+          {
+            cache: 'no-store',
+            signal: controller.signal,
+          },
+          'Event search failed',
+        );
+        if (controller.signal.aborted) return;
+        setEventSearchOptions(Array.isArray(result?.events) ? result.events : []);
+      } catch (_error) {
+        if (!controller.signal.aborted) {
+          setEventSearchOptions([]);
+        }
+      } finally {
+        if (eventSearchAbortRef.current === controller) {
+          setEventSearchLoading(false);
+        }
+      }
+    }, 160);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [draftEventKey, draftTeam, eventSearchOpen]);
   useEffect(() => {
     if (!loadedTeam || !loadedEventKey || offlineMode) return;
     fetchSnapshot(loadedTeam, loadedEventKey, 'auto');
@@ -1480,6 +1684,9 @@ export default function HomePage() {
     const previous = previousQueueStateRef.current;
     previousQueueStateRef.current = queueState;
     if (previous == null || previous === queueState || queueState === 'NONE') return;
+    if (audioEnabled) {
+      void playAudioPattern(queueState);
+    }
 
     const eventKey = queueState === 'PLAYING_NOW' ? 'playing_now' : queueState.toLowerCase();
     const matchLabel = livePointers.ourNextMatch
@@ -1488,10 +1695,18 @@ export default function HomePage() {
     void sendDiscordWebhookEvent(
       eventKey,
       t(`webhook.event.${eventKey}.title`, queueState),
-      `${matchLabel} • ${t('field.team', 'Team')} ${loadedTeam ?? '-'}`,
+      `${matchLabel} | ${t('field.team', 'Team')} ${loadedTeam ?? '-'}`,
       matchLabel ? [{ name: 'Match', value: matchLabel }] : [],
     );
-  }, [livePointers.ourNextMatch, loadedTeam, queueState, sendDiscordWebhookEvent, t]);
+  }, [
+    audioEnabled,
+    livePointers.ourNextMatch,
+    loadedTeam,
+    playAudioPattern,
+    queueState,
+    sendDiscordWebhookEvent,
+    t,
+  ]);
   useEffect(() => {
     const previous = previousOfflineModeRef.current;
     previousOfflineModeRef.current = offlineMode;
@@ -3679,12 +3894,45 @@ export default function HomePage() {
             <span className={`badge ${offlineMode ? 'badge-red' : 'badge-green'}`}>
               {offlineMode ? t('status.offline', 'Offline') : t('status.live', 'Live')}
             </span>
+            <div className="dashboard-product-statuses" aria-label="Live source health">
+              <span
+                className={`badge dashboard-inline-chip dashboard-sync-pill ${isLoading ? 'badge-green' : ''}`}
+              >
+                {t('status.sync_short', 'Sync')}
+              </span>
+              <span
+                className={`badge dashboard-inline-chip ${snapshot?.tba?.event ? 'badge-green' : ''}`}
+              >
+                TBA{' '}
+                {snapshot?.tba?.event
+                  ? t('status.working', 'Working')
+                  : t('status.waiting', 'Waiting')}
+              </span>
+              {sourceValidation ? (
+                <span
+                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
+                    sourceValidation.firstStatus,
+                  )}`}
+                >
+                  FIRST {sourceStatusLabel(sourceValidation.firstStatus)}
+                </span>
+              ) : null}
+              {nexusSnapshot ? (
+                <span
+                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
+                    nexusSnapshot.status,
+                  )}`}
+                >
+                  Nexus {sourceStatusLabel(nexusSnapshot.status)}
+                </span>
+              ) : null}
+            </div>
             {competitionHeaderMeta ? (
               <div
                 className="dashboard-product-event"
                 title={
                   competitionHeaderMeta.competitionDayText
-                    ? `${competitionHeaderMeta.competitionName} • ${competitionHeaderMeta.competitionDayText}`
+                    ? `${competitionHeaderMeta.competitionName} | ${competitionHeaderMeta.competitionDayText}`
                     : competitionHeaderMeta.competitionName
                 }
               >
@@ -3745,26 +3993,90 @@ export default function HomePage() {
               type="number"
               value={draftTeam}
               onChange={(e) => setDraftTeam(Number(e.target.value))}
+              onKeyDown={(event) => handleActionInputKeyDown(event, handleLoad)}
               aria-label={t('field.team', 'Team')}
               placeholder={t('field.team', 'Team')}
             />
-            <input
-              className="input mono dashboard-inline-input dashboard-inline-input-event"
-              value={draftEventKey}
-              onChange={(e) => setDraftEventKey(e.target.value)}
-              aria-label={t('field.event', 'Event')}
-              placeholder={t('field.event', 'Event')}
-            />
+            <div
+              className="dashboard-event-search-shell"
+              onBlur={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget)) return;
+                window.setTimeout(() => setEventSearchOpen(false), 90);
+              }}
+            >
+              <input
+                ref={eventSearchInputRef}
+                className="input mono dashboard-inline-input dashboard-inline-input-event"
+                value={draftEventKey}
+                onChange={(e) => {
+                  setDraftEventKey(e.target.value);
+                  setEventSearchOpen(true);
+                }}
+                onFocus={() => setEventSearchOpen(true)}
+                onKeyDown={(event) => handleActionInputKeyDown(event, handleLoad)}
+                aria-label={t('field.event', 'Event')}
+                placeholder={t('field.event', 'Event')}
+                autoComplete="off"
+              />
+              {showEventSearchResults ? (
+                <div className="dashboard-event-search-results panel">
+                  <div className="dashboard-event-search-results-header">
+                    {eventSearchLoading
+                      ? t('field.searching', 'Searching...')
+                      : teamScopedEventSearch
+                        ? `Team ${Math.floor(Number(draftTeam))} ${EVENT_SEARCH_YEAR} events`
+                        : `${EVENT_SEARCH_YEAR} events`}
+                  </div>
+                  {eventSearchLoading ? (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {t('field.searching_events', 'Searching events...')}
+                    </div>
+                  ) : visibleEventSearchOptions.length ? (
+                    <div className="stack-8">
+                      {visibleEventSearchOptions.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          className="button button-subtle dashboard-event-option"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            chooseEventSearchOption(option);
+                          }}
+                        >
+                          <div style={{ fontWeight: 800 }}>{option.shortName || option.name}</div>
+                          <div className="muted mono" style={{ fontSize: 11 }}>
+                            {option.key}
+                          </div>
+                          {option.location ? (
+                            <div className="muted" style={{ fontSize: 11 }}>
+                              {option.location}
+                            </div>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {teamScopedEventSearch
+                        ? `No ${EVENT_SEARCH_YEAR} events found for Team ${Math.floor(Number(draftTeam))}.`
+                        : `No ${EVENT_SEARCH_YEAR} events matched.`}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <button className="button button-primary dashboard-inline-button" onClick={handleLoad}>
               {t('field.load', 'Load')}
             </button>
             <button
+              type="button"
               className={`button dashboard-inline-button ${offlineMode ? 'button-danger' : 'button-subtle'}`}
               onClick={() => setOfflineMode((v) => !v)}
             >
               {offlineMode ? t('status.offline', 'Offline') : t('field.go_offline', 'Go Offline')}
             </button>
             <button
+              type="button"
               className="button button-subtle dashboard-inline-button"
               onClick={() => setOfflineAdvance((v) => v + 1)}
               disabled={!offlineMode}
@@ -3774,12 +4086,13 @@ export default function HomePage() {
               {t('field.advance_match', '+1 Match')}
             </button>
             <button
-              className="button button-subtle dashboard-inline-button"
-              onClick={() => setArmedAudio(true)}
+              type="button"
+              className={`button dashboard-inline-button ${audioEnabled ? 'button-primary' : 'button-subtle'}`}
+              onClick={() => void toggleAudio()}
               aria-label={t('field.audio', 'Audio')}
               title={t('field.audio', 'Audio')}
             >
-              {armedAudio ? t('field.audio_on', 'Audio On') : t('field.audio', 'Audio')}
+              {audioEnabled ? t('field.audio_on', 'Audio On') : t('field.audio_off', 'Audio Off')}
             </button>
             <div className="dashboard-status-strip">
               <span className="badge badge-blue dashboard-inline-chip">
@@ -3796,39 +4109,8 @@ export default function HomePage() {
               <span className="badge dashboard-inline-chip">
                 {t('field.updated', 'Updated')} {lastUpdateText}
               </span>
-              {snapshot?.tba?.event ? (
-                <span className="badge badge-green dashboard-inline-chip">TBA Working</span>
-              ) : null}
-              {sourceValidation ? (
-                <span
-                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
-                    sourceValidation.firstStatus,
-                  )}`}
-                >
-                  FIRST {sourceStatusLabel(sourceValidation.firstStatus)}
-                </span>
-              ) : null}
-              {nexusSnapshot ? (
-                <span
-                  className={`badge dashboard-inline-chip ${sourceStatusBadgeClass(
-                    nexusSnapshot.status,
-                  )}`}
-                >
-                  Nexus {sourceStatusLabel(nexusSnapshot.status)}
-                </span>
-              ) : null}
               {nexusSnapshot?.queueText ? (
                 <span className="badge dashboard-inline-chip">{nexusSnapshot.queueText}</span>
-              ) : null}
-              {liveSignals.length ? (
-                <span className="badge dashboard-inline-chip">
-                  {t('field.signals', 'Signals')} {liveSignals.length}
-                </span>
-              ) : null}
-              {isLoading ? (
-                <span className="badge badge-green dashboard-inline-chip">
-                  {t('status.syncing', 'Syncing')}
-                </span>
               ) : null}
               {errorText ? (
                 <span className="badge badge-red dashboard-inline-chip">{errorText}</span>
@@ -4170,8 +4452,8 @@ export default function HomePage() {
                         {loadedTeamOps.queueState ?? 'No active Nexus team queue context'}
                       </div>
                       <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-                        Pit {loadedTeamOps.pitAddress ?? 'â€”'} | Inspection{' '}
-                        {loadedTeamOps.inspectionStatus ?? 'â€”'}
+                        Pit {loadedTeamOps.pitAddress ?? '-'} | Inspection{' '}
+                        {loadedTeamOps.inspectionStatus ?? '-'}
                       </div>
                     </div>
                     <div className="panel-2" style={{ padding: 12 }}>
@@ -4179,8 +4461,8 @@ export default function HomePage() {
                         Bumper + Timing
                       </div>
                       <div style={{ fontWeight: 900, marginTop: 6 }}>
-                        {loadedTeamOps.bumperColor ?? 'â€”'} | Away{' '}
-                        {loadedTeamOps.queueMatchesAway ?? 'â€”'}
+                        {loadedTeamOps.bumperColor ?? '-'} | Away{' '}
+                        {loadedTeamOps.queueMatchesAway ?? '-'}
                       </div>
                       <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
                         Queue {formatOpsTime(loadedTeamOps.estimatedQueueTimeMs)}
@@ -4214,7 +4496,7 @@ export default function HomePage() {
                       Stale{' '}
                       {sourceValidation.staleSeconds != null
                         ? `${sourceValidation.staleSeconds}s`
-                        : 'â€”'}
+                        : '-'}
                     </div>
                   </div>
                 ) : null}
@@ -5372,7 +5654,7 @@ export default function HomePage() {
                           borderBottom: '1px solid #1a2333',
                         }}
                       >
-                        {pred?.red_win_prob != null ? pct(1 - Number(pred.red_win_prob)) : 'â€”'}
+                        {pred?.red_win_prob != null ? pct(1 - Number(pred.red_win_prob)) : '-'}
                       </td>
                       <td
                         style={{
@@ -5382,7 +5664,7 @@ export default function HomePage() {
                       >
                         {pred?.red_score != null
                           ? `R ${fmt(pred.red_score, 0)} / B ${fmt(pred.blue_score, 0)}`
-                          : 'â€”'}
+                          : '-'}
                       </td>
                     </tr>
                   );
@@ -5897,9 +6179,9 @@ export default function HomePage() {
                       {loadedTeamOps.queueState ?? 'No loaded-team queue context'}
                     </div>
                     <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-                      Pit {loadedTeamOps.pitAddress ?? 'â€”'} | Inspection{' '}
-                      {loadedTeamOps.inspectionStatus ?? 'â€”'} | Bumper{' '}
-                      {loadedTeamOps.bumperColor ?? 'â€”'}
+                      Pit {loadedTeamOps.pitAddress ?? '-'} | Inspection{' '}
+                      {loadedTeamOps.inspectionStatus ?? '-'} | Bumper{' '}
+                      {loadedTeamOps.bumperColor ?? '-'}
                     </div>
                     <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
                       Queue {formatOpsTime(loadedTeamOps.estimatedQueueTimeMs)} | On Deck{' '}
@@ -6204,7 +6486,7 @@ export default function HomePage() {
                 {mediaEntries.map((item, index) => {
                   const label =
                     String(item?.type ?? item?.media_type ?? 'Media') +
-                    (item?.foreign_key ? ` • ${String(item.foreign_key)}` : '');
+                    (item?.foreign_key ? ` | ${String(item.foreign_key)}` : '');
                   const href =
                     (typeof item?.direct_url === 'string' && item.direct_url) ||
                     (typeof item?.view_url === 'string' && item.view_url) ||
@@ -7883,12 +8165,14 @@ export default function HomePage() {
                   className="input"
                   value={pickListComment}
                   onChange={(e) => setPickListComment(e.target.value)}
+                  onKeyDown={(event) => handleActionInputKeyDown(event, addPickListEntry)}
                   placeholder="Comment"
                 />
                 <input
                   className="input"
                   value={pickListTag}
                   onChange={(e) => setPickListTag(e.target.value)}
+                  onKeyDown={(event) => handleActionInputKeyDown(event, addPickListEntry)}
                   placeholder="Tag"
                 />
                 <button className="button" onClick={addPickListEntry} disabled={!pickListEntry}>
@@ -8989,6 +9273,43 @@ export default function HomePage() {
                 />
                 {t('settings.repeat_alert', 'Repeat alert sound until stopped')}
               </label>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 800 }}>
+                      {audioEnabled
+                        ? t('field.audio_on', 'Audio On')
+                        : t('field.audio_off', 'Audio Off')}
+                    </div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                      {audioStatusText ||
+                        'Enable audio once, then use Test Audio to confirm this browser/device can play alerts.'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="button" type="button" onClick={() => void toggleAudio()}>
+                      {audioEnabled
+                        ? t('field.audio_off', 'Audio Off')
+                        : t('field.audio_on', 'Audio On')}
+                    </button>
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      onClick={() => void playAudioPattern('TEST', { updateStatus: true })}
+                    >
+                      {t('field.test_audio', 'Test Audio')}
+                    </button>
+                  </div>
+                </div>
+              </div>
               <div className="grid-2">
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span className="muted" style={{ fontSize: 12 }}>
@@ -9351,6 +9672,11 @@ export default function HomePage() {
                 <div style={{ fontWeight: 800 }}>
                   {sourceValidation?.summary ?? 'No validation snapshot yet'}
                 </div>
+                {firstErrorHint ? (
+                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                    {firstErrorHint}
+                  </div>
+                ) : null}
               </div>
               <div className="grid-2">
                 <div className="panel-2" style={{ padding: 12 }}>
@@ -9364,6 +9690,25 @@ export default function HomePage() {
                     Missing Checks
                   </div>
                   <div style={{ fontWeight: 900 }}>{validationCounts.missing}</div>
+                </div>
+              </div>
+              <div className="grid-2">
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                    Official Event
+                  </div>
+                  <div style={{ fontWeight: 900 }}>
+                    {officialCounts?.eventPresent ? 'Present' : 'Missing'}
+                  </div>
+                </div>
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                    Official Counts
+                  </div>
+                  <div style={{ fontWeight: 900 }}>
+                    R {officialCounts?.rankings ?? 0} | M {officialCounts?.matches ?? 0} | A{' '}
+                    {officialCounts?.awards ?? 0}
+                  </div>
                 </div>
               </div>
             </div>

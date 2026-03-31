@@ -593,6 +593,16 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.dashboard-product-statuses {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
 .dashboard-product-event {
   display: flex;
   align-items: center;
@@ -675,7 +685,7 @@ textarea:focus-visible {
   gap: 4px;
   min-width: 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
   white-space: nowrap;
 }
@@ -754,6 +764,41 @@ textarea:focus-visible {
 
 .dashboard-inline-input-event {
   width: 102px;
+}
+
+.dashboard-event-search-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.dashboard-event-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: min(360px, 88vw);
+  max-width: min(420px, 92vw);
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  padding: 10px;
+  z-index: 75;
+}
+
+.dashboard-event-search-results-header {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dashboard-event-option {
+  width: 100%;
+  justify-content: flex-start;
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
 }
 
 .dashboard-inline-button {

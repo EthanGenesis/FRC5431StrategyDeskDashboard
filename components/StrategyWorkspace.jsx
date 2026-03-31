@@ -1080,37 +1080,6 @@ export default function StrategyWorkspace({
               </option>
             ))}
           </select>
-          <select
-            className="input"
-            value={activeTool}
-            onChange={(event) => setActiveTool(event.target.value)}
-          >
-            <option value="pen">Pen</option>
-            <option value="line">Line</option>
-            <option value="arrow">Arrow</option>
-            <option value="rectangle">Rectangle</option>
-            <option value="circle">Circle</option>
-            <option value="text">Text</option>
-            <option value="eraser">Eraser</option>
-          </select>
-          <input
-            className="input"
-            type="color"
-            value={strokeColor}
-            onChange={(event) => setStrokeColor(event.target.value)}
-            style={{ width: 60, padding: 6 }}
-          />
-          <select
-            className="input"
-            value={strokeWidth}
-            onChange={(event) => setStrokeWidth(Number(event.target.value))}
-          >
-            <option value={2}>2px</option>
-            <option value={4}>4px</option>
-            <option value={6}>6px</option>
-            <option value={8}>8px</option>
-            <option value={10}>10px</option>
-          </select>
           <button
             className="button"
             onClick={() => {
@@ -1636,6 +1605,52 @@ export default function StrategyWorkspace({
           </div>
         </div>
       </DisclosureSection>
+
+      <div className="panel strategy-screen-only" style={{ padding: 16 }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+            alignItems: 'center',
+          }}
+        >
+          <span className="muted" style={{ fontSize: 12, fontWeight: 700 }}>
+            Drawing Tools
+          </span>
+          <select
+            className="input"
+            value={activeTool}
+            onChange={(event) => setActiveTool(event.target.value)}
+          >
+            <option value="pen">Pen</option>
+            <option value="line">Line</option>
+            <option value="arrow">Arrow</option>
+            <option value="rectangle">Rectangle</option>
+            <option value="circle">Circle</option>
+            <option value="text">Text</option>
+            <option value="eraser">Eraser</option>
+          </select>
+          <input
+            className="input"
+            type="color"
+            value={strokeColor}
+            onChange={(event) => setStrokeColor(event.target.value)}
+            style={{ width: 60, padding: 6 }}
+          />
+          <select
+            className="input"
+            value={strokeWidth}
+            onChange={(event) => setStrokeWidth(Number(event.target.value))}
+          >
+            <option value={2}>2px</option>
+            <option value={4}>4px</option>
+            <option value={6}>6px</option>
+            <option value={8}>8px</option>
+            <option value={10}>10px</option>
+          </select>
+        </div>
+      </div>
 
       <div className="strategy-board-grid">
         <StrategyBoard
