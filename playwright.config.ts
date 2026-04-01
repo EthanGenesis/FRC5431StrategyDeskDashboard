@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -6,6 +6,21 @@ export default defineConfig({
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        browserName: 'chromium',
+      },
+    },
+    {
+      name: 'webkit-iphone',
+      grep: /mobile/i,
+      use: {
+        ...devices['iPhone 13'],
+      },
+    },
+  ],
   use: {
     baseURL: 'http://127.0.0.1:3001',
     trace: 'on-first-retry',

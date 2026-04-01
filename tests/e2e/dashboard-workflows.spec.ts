@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 const EVENT_KEY = '2026test';
 const TEAM_NUMBERS = [5431, 111, 222, 333, 444, 555];
@@ -808,31 +808,35 @@ async function mockDashboardApis(page: Page) {
         Player: MockYouTubePlayer,
       };
 
-      window.localStorage.clear();
-      window.localStorage.setItem(
-        'tbsb_dashboard_settings_v1',
-        JSON.stringify({
-          teamNumber,
-          eventKey,
-          lagMatches: 2,
-          pollMs: 5000,
-          repeatUntilAck: true,
-          enablePlayingAnimation: true,
-          recentStartQual: 1,
-          scoutingUrl: '',
-          logoDataUrl: null,
-          weights: {
-            overallEpa: 30,
-            autoEpa: 10,
-            teleopEpa: 15,
-            endgameEpa: 10,
-            opr: 10,
-            ccwm: 10,
-            rpPace: 10,
-            recentTrend: 15,
-          },
-        }),
-      );
+      try {
+        window.localStorage.clear();
+        window.localStorage.setItem(
+          'tbsb_dashboard_settings_v1',
+          JSON.stringify({
+            teamNumber,
+            eventKey,
+            lagMatches: 2,
+            pollMs: 5000,
+            repeatUntilAck: true,
+            enablePlayingAnimation: true,
+            recentStartQual: 1,
+            scoutingUrl: '',
+            logoDataUrl: null,
+            weights: {
+              overallEpa: 30,
+              autoEpa: 10,
+              teleopEpa: 15,
+              endgameEpa: 10,
+              opr: 10,
+              ccwm: 10,
+              rpPace: 10,
+              recentTrend: 15,
+            },
+          }),
+        );
+      } catch {
+        // Mobile Safari/WebKit can block storage access; the desk can still load via manual inputs.
+      }
     },
     { eventKey: EVENT_KEY, teamNumber: 5431 },
   );
@@ -842,11 +846,23 @@ test.beforeEach(async ({ page }) => {
   await mockDashboardApis(page);
 });
 
+async function setControlledInputValue(locator: Locator, value: string) {
+  await locator.waitFor({ state: 'visible' });
+  await locator.evaluate((input, nextValue) => {
+    const descriptor =
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') ??
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value');
+    descriptor?.set?.call(input, nextValue);
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+  }, value);
+}
+
 async function loadMockedDeskState(page: Page) {
   await page.goto('/');
 
-  await page.getByRole('spinbutton', { name: 'Team' }).fill('5431');
-  await page.getByRole('textbox', { name: 'Event' }).fill(EVENT_KEY);
+  await setControlledInputValue(page.getByRole('spinbutton', { name: 'Team' }), '5431');
+  await setControlledInputValue(page.getByRole('textbox', { name: 'Event' }), EVENT_KEY);
   await Promise.all([
     page.waitForResponse(
       (response) =>
@@ -923,6 +939,18 @@ async function scrollInlineWebcastIntoView(page: Page) {
   await anchor.waitFor({ state: 'attached' });
   await anchor.evaluate((node) => {
     node.scrollIntoView({ block: 'center' });
+  });
+}
+
+async function getMonteCarloComputeCount(page: Page) {
+  return page.evaluate(() => {
+    return (
+      (
+        window as Window & {
+          __tbsbDashboardBootDebug?: { mcProjectionComputes?: number };
+        }
+      ).__tbsbDashboardBootDebug?.mcProjectionComputes ?? 0
+    );
   });
 }
 
@@ -1158,6 +1186,18 @@ test('closing the floating mini-player keeps it dismissed until playback restart
   await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
 });
 
+test('monte carlo forecast stays idle until PREDICT is opened', async ({ page }) => {
+  await loadMockedDeskState(page);
+
+  expect(await getMonteCarloComputeCount(page)).toBe(0);
+
+  await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+  expect(await getMonteCarloComputeCount(page)).toBe(0);
+
+  await page.getByRole('button', { name: 'PREDICT' }).first().click();
+  await expect.poll(() => getMonteCarloComputeCount(page)).toBeGreaterThan(0);
+});
+
 test.describe('mobile webcast behavior', () => {
   test.use({
     viewport: { width: 390, height: 844 },
@@ -1185,6 +1225,25 @@ test.describe('mobile webcast behavior', () => {
     await page.waitForTimeout(200);
     await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Exit PiP' })).toHaveCount(0);
+  });
+
+  test('loaded desk stays stable moving from NOW to EVENT to PREDICT', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => {
+      pageErrors.push(error.message);
+    });
+
+    await loadMockedDeskState(page);
+    await expect(page.getByText('Live Webcast')).toBeVisible();
+
+    await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+    await expect(page.getByText('Ops + Live Signals')).toBeVisible();
+
+    await page.getByRole('button', { name: 'PREDICT' }).first().click();
+    await expect(
+      page.locator('.page-header-title').filter({ hasText: 'Qualification Forecast' }),
+    ).toBeVisible();
+    expect(pageErrors).toEqual([]);
   });
 });
 

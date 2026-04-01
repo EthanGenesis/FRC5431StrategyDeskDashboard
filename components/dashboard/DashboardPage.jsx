@@ -128,6 +128,31 @@ function averageNullable(values) {
   if (!cleaned.length) return null;
   return mean(cleaned);
 }
+const EMPTY_OBJECT = Object.freeze({});
+const EMPTY_ARRAY = Object.freeze([]);
+function cloneDashboardValue(value) {
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+function ensureDashboardBootDebug() {
+  if (typeof window === 'undefined') return null;
+  if (!window.__tbsbDashboardBootDebug || typeof window.__tbsbDashboardBootDebug !== 'object') {
+    window.__tbsbDashboardBootDebug = {
+      mcProjectionComputes: 0,
+    };
+  }
+  return window.__tbsbDashboardBootDebug;
+}
+function resetDashboardBootDebug() {
+  const debug = ensureDashboardBootDebug();
+  if (!debug) return;
+  debug.mcProjectionComputes = 0;
+}
+function incrementDashboardBootDebugCounter(key) {
+  const debug = ensureDashboardBootDebug();
+  if (!debug) return;
+  debug[key] = Number(debug[key] ?? 0) + 1;
+}
 function normalizeNonNegativeInteger(value) {
   const numeric = Math.max(0, Math.floor(Number(value) || 0));
   return Number.isFinite(numeric) ? numeric : 0;
@@ -963,6 +988,8 @@ export default function HomePage() {
   const [desktopWebcastPiPEnabled, setDesktopWebcastPiPEnabled] = useState(false);
   const [inlineWebcastInView, setInlineWebcastInView] = useState(true);
   const [persistedWebcastSuppressed, setPersistedWebcastSuppressed] = useState(false);
+  const [predictForecastReadyEventKey, setPredictForecastReadyEventKey] = useState(null);
+  const [predictWorkbenchReadyEventKey, setPredictWorkbenchReadyEventKey] = useState(null);
   const officialCounts = sourceValidation?.officialCounts ?? null;
   const firstZeroCounts =
     sourceValidation?.firstStatus === 'error' &&
@@ -983,6 +1010,20 @@ export default function HomePage() {
       nexusSnapshot?.loadedTeamOps ??
       deriveTeamOpsFromNexusSnapshot(nexusSnapshot, loadedTeam ?? null),
     [loadedTeam, nexusSnapshot],
+  );
+  const isPredictMajorTab = majorTab === 'PREDICT';
+  const isDataSubtabActive =
+    (majorTab === 'CURRENT' && currentSubTab === 'DATA') ||
+    (majorTab === 'HISTORICAL' && historicalSubTab === 'DATA');
+  const predictForecastSurfaceActive = isPredictMajorTab || isDataSubtabActive;
+  const predictWorkbenchSurfaceActive = isPredictMajorTab;
+  const shouldComputePredictForecast = Boolean(
+    loadedEventKey &&
+    (predictForecastSurfaceActive || predictForecastReadyEventKey === loadedEventKey),
+  );
+  const shouldComputePredictWorkbench = Boolean(
+    loadedEventKey &&
+    (predictWorkbenchSurfaceActive || predictWorkbenchReadyEventKey === loadedEventKey),
   );
   const isNowTab = majorTab === 'CURRENT' && currentSubTab === 'NOW';
   const webcastPlaybackSuppressed =
@@ -1007,6 +1048,25 @@ export default function HomePage() {
   const showInlineWebcast = Boolean(
     isNowTab && preferredYouTubeVideoId && (!desktopWebcastPiPEnabled || !showFloatingWebcast),
   );
+  useEffect(() => {
+    if (!loadedEventKey) {
+      setPredictForecastReadyEventKey(null);
+      return;
+    }
+    if (!predictForecastSurfaceActive) return;
+    setPredictForecastReadyEventKey((prev) => (prev === loadedEventKey ? prev : loadedEventKey));
+  }, [loadedEventKey, predictForecastSurfaceActive]);
+  useEffect(() => {
+    if (!loadedEventKey) {
+      setPredictWorkbenchReadyEventKey(null);
+      return;
+    }
+    if (!predictWorkbenchSurfaceActive) return;
+    setPredictWorkbenchReadyEventKey((prev) => (prev === loadedEventKey ? prev : loadedEventKey));
+  }, [loadedEventKey, predictWorkbenchSurfaceActive]);
+  useEffect(() => {
+    resetDashboardBootDebug();
+  }, [loadedEventKey]);
   const pitAddressRows = useMemo(() => {
     const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
       teamNumber: Number(teamNumber),
@@ -1815,94 +1875,99 @@ export default function HomePage() {
       }
     };
 
-    const channel = client
-      .channel(`workspace-live:${activeWorkspaceKey}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.workspaceSettings },
-        (payload) => {
-          if (matchesWorkspace(payload)) void reloadWorkspaceSettings();
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.predictScenarios },
-        (payload) => {
-          if (matchesWorkspace(payload)) {
-            void reloadArtifacts(
-              PERSISTENCE_TABLES.predictScenarios,
-              setSavedPredictScenarios,
-              skipPredictSaveRef,
-            );
-          }
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.allianceScenarios },
-        (payload) => {
-          if (matchesWorkspace(payload)) {
-            void reloadArtifacts(
-              PERSISTENCE_TABLES.allianceScenarios,
-              setSavedAllianceScenarios,
-              skipAllianceSaveRef,
-            );
-          }
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.pickLists },
-        (payload) => {
-          if (matchesWorkspace(payload)) {
-            void reloadArtifacts(PERSISTENCE_TABLES.pickLists, setPickLists, skipPickListSaveRef);
-          }
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.playoffResults },
-        (payload) => {
-          if (matchesWorkspace(payload)) {
-            void reloadArtifacts(
-              PERSISTENCE_TABLES.playoffResults,
-              setSavedPlayoffResults,
-              skipPlayoffSaveRef,
-            );
-          }
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareDrafts },
-        (payload) => {
-          if (!matchesWorkspace(payload)) return;
-          setCurrentCompareSyncKey((value) => value + 1);
-          setHistoricalCompareSyncKey((value) => value + 1);
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareSets },
-        (payload) => {
-          if (!matchesWorkspace(payload)) return;
-          setCurrentCompareSyncKey((value) => value + 1);
-          setHistoricalCompareSyncKey((value) => value + 1);
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: PERSISTENCE_TABLES.eventLiveSignals },
-        (payload) => {
-          if (!matchesWorkspace(payload)) return;
-          refreshLiveSnapshot(payload);
-        },
-      )
-      .subscribe();
+    let channel = null;
+    try {
+      channel = client
+        .channel(`workspace-live:${activeWorkspaceKey}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.workspaceSettings },
+          (payload) => {
+            if (matchesWorkspace(payload)) void reloadWorkspaceSettings();
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.predictScenarios },
+          (payload) => {
+            if (matchesWorkspace(payload)) {
+              void reloadArtifacts(
+                PERSISTENCE_TABLES.predictScenarios,
+                setSavedPredictScenarios,
+                skipPredictSaveRef,
+              );
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.allianceScenarios },
+          (payload) => {
+            if (matchesWorkspace(payload)) {
+              void reloadArtifacts(
+                PERSISTENCE_TABLES.allianceScenarios,
+                setSavedAllianceScenarios,
+                skipAllianceSaveRef,
+              );
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.pickLists },
+          (payload) => {
+            if (matchesWorkspace(payload)) {
+              void reloadArtifacts(PERSISTENCE_TABLES.pickLists, setPickLists, skipPickListSaveRef);
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.playoffResults },
+          (payload) => {
+            if (matchesWorkspace(payload)) {
+              void reloadArtifacts(
+                PERSISTENCE_TABLES.playoffResults,
+                setSavedPlayoffResults,
+                skipPlayoffSaveRef,
+              );
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareDrafts },
+          (payload) => {
+            if (!matchesWorkspace(payload)) return;
+            setCurrentCompareSyncKey((value) => value + 1);
+            setHistoricalCompareSyncKey((value) => value + 1);
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.compareSets },
+          (payload) => {
+            if (!matchesWorkspace(payload)) return;
+            setCurrentCompareSyncKey((value) => value + 1);
+            setHistoricalCompareSyncKey((value) => value + 1);
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.eventLiveSignals },
+          (payload) => {
+            if (!matchesWorkspace(payload)) return;
+            refreshLiveSnapshot(payload);
+          },
+        )
+        .subscribe();
+    } catch (error) {
+      console.warn('workspace_realtime_unavailable', error);
+    }
 
     return () => {
       cancelled = true;
-      void client.removeChannel(channel);
+      if (channel) void client.removeChannel(channel);
     };
   }, [activeWorkspaceKey, fetchSnapshot, loadedEventKey, loadedTeam]);
   const sortedMatches = useMemo(() => sortMatches(snapshot?.tba?.matches ?? []), [snapshot]);
@@ -2868,12 +2933,14 @@ export default function HomePage() {
     openCommandPalette,
   ]);
   useEffect(() => {
+    if (!shouldComputePredictWorkbench) return;
     if (!loadedTeam) return;
     const nextQual = ourUpcomingMatches.find((m) => m.comp_level === 'qm');
     if (nextQual?.key && !impactSelectedMatchKey) setImpactSelectedMatchKey(nextQual.key);
-  }, [loadedTeam, ourUpcomingMatches, impactSelectedMatchKey]);
+  }, [impactSelectedMatchKey, loadedTeam, ourUpcomingMatches, shouldComputePredictWorkbench]);
   // Predict baseline/prefill
   const predictBaseMap = useMemo(() => {
+    if (!shouldComputePredictForecast) return EMPTY_OBJECT;
     const map = {};
     for (const match of sortedMatches.filter((m) => m.comp_level === 'qm')) {
       map[match.key] = {
@@ -2882,8 +2949,9 @@ export default function HomePage() {
       };
     }
     return map;
-  }, [sortedMatches]);
+  }, [shouldComputePredictForecast, sortedMatches]);
   useEffect(() => {
+    if (!shouldComputePredictForecast) return;
     if (!loadedEventKey) return;
     const matchKeys = Object.keys(predictBaseMap);
     if (!matchKeys.length) return;
@@ -2908,8 +2976,9 @@ export default function HomePage() {
       }
       return changed ? nextOverrides : prev;
     });
-  }, [loadedEventKey, predictBaseMap]);
+  }, [loadedEventKey, predictBaseMap, shouldComputePredictForecast]);
   const predictMatchRows = useMemo(() => {
+    if (!shouldComputePredictForecast) return EMPTY_ARRAY;
     let rows = sortedMatches.filter((m) =>
       predictFilter === 'playoffs' ? m.comp_level !== 'qm' : m.comp_level === 'qm',
     );
@@ -2919,13 +2988,15 @@ export default function HomePage() {
       rows = rows.filter((m) => matchHasTeam(m, ourKey));
     }
     return rows;
-  }, [sortedMatches, predictFilter, loadedTeam]);
+  }, [loadedTeam, predictFilter, shouldComputePredictForecast, sortedMatches]);
   const currentTotalsMap = useMemo(() => {
+    if (!shouldComputePredictForecast && !shouldComputePredictWorkbench) return new Map();
     const map = new Map();
     eventTeamRows.forEach((row) => map.set(row.teamKey, Number(row.totalRp ?? 0)));
     return map;
-  }, [eventTeamRows]);
+  }, [eventTeamRows, shouldComputePredictForecast, shouldComputePredictWorkbench]);
   const projectedRows = useMemo(() => {
+    if (!shouldComputePredictForecast) return EMPTY_ARRAY;
     const totals = new Map(currentTotalsMap);
     for (const match of sortedMatches.filter((m) => m.comp_level === 'qm')) {
       const override = predictOverrides[match.key] ?? {
@@ -2949,11 +3020,19 @@ export default function HomePage() {
       row.projectedRank = idx + 1;
     });
     return rows;
-  }, [eventTeamRows, currentTotalsMap, sortedMatches, predictOverrides, predictBaseMap]);
+  }, [
+    currentTotalsMap,
+    eventTeamRows,
+    predictBaseMap,
+    predictOverrides,
+    shouldComputePredictForecast,
+    sortedMatches,
+  ]);
   const ourProjected = useMemo(() => {
+    if (!shouldComputePredictForecast) return null;
     const ourKey = loadedTeam != null ? tbaTeamKey(loadedTeam) : '';
     return projectedRows.find((r) => r.teamKey === ourKey) ?? null;
-  }, [projectedRows, loadedTeam]);
+  }, [loadedTeam, projectedRows, shouldComputePredictForecast]);
   const getMatchPredictionProfile = useCallback(
     (match) => {
       const pred = getSbPred(sbMatchMap.get(match.key));
@@ -2975,6 +3054,7 @@ export default function HomePage() {
     [sbMatchMap],
   );
   const deterministicRows = useMemo(() => {
+    if (!shouldComputePredictForecast) return EMPTY_ARRAY;
     const totals = new Map(currentTotalsMap);
     for (const match of sortedMatches.filter((m) => m.comp_level === 'qm')) {
       const override = predictOverrides[match.key];
@@ -3009,13 +3089,40 @@ export default function HomePage() {
     return rows;
   }, [
     currentTotalsMap,
-    sortedMatches,
-    predictOverrides,
-    predictBaseMap,
     eventTeamRows,
     getMatchPredictionProfile,
+    predictBaseMap,
+    predictOverrides,
+    shouldComputePredictForecast,
+    sortedMatches,
   ]);
   const computeMonteCarloProjection = useCallback(() => {
+    if (!shouldComputePredictForecast) {
+      return {
+        rows: eventTeamRows.map((row) => ({
+          ...row,
+          mcAvgRank: row.rank ?? null,
+          mcTop1: 0,
+          mcTop4: 0,
+          mcTop8: 0,
+          mcLikelyBand: 'â€”',
+          mcAvgTotalRp: row.totalRp ?? 0,
+        })),
+        ourAvgSeed: null,
+        ourMostLikelySeed: null,
+        ourTop1: 0,
+        ourTop4: 0,
+        ourTop8: 0,
+        ourLikelyBand: 'â€”',
+        ourObservedHighest: null,
+        ourObservedLowest: null,
+        ourTheoreticalHighest: 1,
+        ourTheoreticalLowest: eventTeamRows.length || null,
+        uniqueScenarioCount: 0,
+        top16Scenarios: [],
+      };
+    }
+    incrementDashboardBootDebugCounter('mcProjectionComputes');
     const futureQuals = sortedMatches.filter((m) => m.comp_level === 'qm' && !matchIsCompleted(m));
     const totalsBase = new Map(currentTotalsMap);
     for (const match of sortedMatches.filter((m) => m.comp_level === 'qm')) {
@@ -3138,10 +3245,14 @@ export default function HomePage() {
     sbMatchMap,
     simRuns,
     sortedMatches,
+    shouldComputePredictForecast,
   ]);
   const completedQualCount = useMemo(
-    () => sortedMatches.filter((m) => m.comp_level === 'qm' && matchIsCompleted(m)).length,
-    [sortedMatches],
+    () =>
+      shouldComputePredictForecast
+        ? sortedMatches.filter((m) => m.comp_level === 'qm' && matchIsCompleted(m)).length
+        : 0,
+    [shouldComputePredictForecast, sortedMatches],
   );
   const emptyMonteCarloProjection = useMemo(
     () => ({
@@ -3171,6 +3282,13 @@ export default function HomePage() {
   );
   const monteCarloProjection = mcProjectionSnapshot ?? emptyMonteCarloProjection;
   const monteCarloScenarioSpace = useMemo(() => {
+    if (!shouldComputePredictForecast) {
+      return {
+        depth: 0,
+        orderedCount: '0',
+        unorderedCount: '0',
+      };
+    }
     const teamCount = eventTeamRows.length;
     const depth = Math.min(MONTE_CARLO_SCENARIO_DEPTH, teamCount);
     return {
@@ -3178,8 +3296,14 @@ export default function HomePage() {
       orderedCount: permutationCount(teamCount, depth),
       unorderedCount: combinationCount(teamCount, depth),
     };
-  }, [MONTE_CARLO_SCENARIO_DEPTH, eventTeamRows.length]);
+  }, [MONTE_CARLO_SCENARIO_DEPTH, eventTeamRows.length, shouldComputePredictForecast]);
   useEffect(() => {
+    setMcProjectionSnapshot(null);
+    setMcProjectionDirty(false);
+    setLastMcCompletedQualCount(0);
+  }, [loadedEventKey]);
+  useEffect(() => {
+    if (!shouldComputePredictForecast) return;
     if (!mcProjectionSnapshot && eventTeamRows.length) {
       const computed = computeMonteCarloProjection();
       setMcProjectionSnapshot(computed);
@@ -3192,16 +3316,25 @@ export default function HomePage() {
     eventTeamRows.length,
     loadedEventKey,
     mcProjectionSnapshot,
+    shouldComputePredictForecast,
   ]);
   useEffect(() => {
+    if (!shouldComputePredictForecast) return;
     if (!mcProjectionSnapshot) return;
     setMcProjectionDirty(true);
-  }, [mcProjectionSnapshot, predictOverrides, simRuns]);
+  }, [mcProjectionSnapshot, predictOverrides, shouldComputePredictForecast, simRuns]);
   useEffect(() => {
+    if (!shouldComputePredictForecast) return;
     if (!mcProjectionSnapshot) return;
     if (completedQualCount !== lastMcCompletedQualCount) setMcProjectionDirty(true);
-  }, [completedQualCount, lastMcCompletedQualCount, mcProjectionSnapshot]);
+  }, [
+    completedQualCount,
+    lastMcCompletedQualCount,
+    mcProjectionSnapshot,
+    shouldComputePredictForecast,
+  ]);
   function recomputeMonteCarloProjection() {
+    if (!shouldComputePredictForecast) return;
     const computed = computeMonteCarloProjection();
     setMcProjectionSnapshot(computed);
     setLastMcCompletedQualCount(completedQualCount);
@@ -3279,6 +3412,7 @@ export default function HomePage() {
   );
   // Alliance source rows
   const allianceSourceRows = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     if (allianceSourceType === 'live') {
       return [...eventTeamRows]
         .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
@@ -3346,6 +3480,7 @@ export default function HomePage() {
     projectedRows,
     deterministicRows,
     monteCarloProjection,
+    shouldComputePredictWorkbench,
   ]);
   const top8LiveOrScenario = useMemo(() => allianceSourceRows.slice(0, 8), [allianceSourceRows]);
   function freshAllianceStateFromSource(sourceRows) {
@@ -3367,16 +3502,22 @@ export default function HomePage() {
   }
   const [allianceRuntime, setAllianceRuntime] = useState(null);
   useEffect(() => {
+    if (!shouldComputePredictWorkbench) {
+      setAllianceRuntime((prev) => (prev == null ? prev : null));
+      return;
+    }
     const sourceRows = allianceSourceRows.length ? allianceSourceRows : top8LiveOrScenario;
     if (allianceLiveLocked) return;
     setAllianceRuntime(freshAllianceStateFromSource(sourceRows));
     setAlliancePickTarget('');
-  }, [allianceSourceRows, top8LiveOrScenario, allianceLiveLocked]);
+  }, [allianceLiveLocked, allianceSourceRows, shouldComputePredictWorkbench, top8LiveOrScenario]);
   const allianceCurrentCaptain = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return null;
     if (!allianceRuntime?.captainSlots?.length) return null;
     return allianceRuntime.captainSlots[allianceRuntime.currentIndex] ?? null;
-  }, [allianceRuntime]);
+  }, [allianceRuntime, shouldComputePredictWorkbench]);
   const availableTeams = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     const sourceRows = allianceRuntime?.sourceRows ?? [];
     const declined = new Set(allianceRuntime?.declined ?? []);
     const captainSlots = allianceRuntime?.captainSlots ?? [];
@@ -3406,18 +3547,27 @@ export default function HomePage() {
         opr: (r) => -Number(r.opr ?? -999),
       }[allianceSortMode] ?? ((r) => -Number(r.composite ?? -999));
     return [...rows].sort((a, b) => sorter(a) - sorter(b));
-  }, [allianceRuntime, allianceCurrentCaptain, allianceSortMode]);
+  }, [allianceCurrentCaptain, allianceRuntime, allianceSortMode, shouldComputePredictWorkbench]);
   const allianceCandidateInsights = useMemo(
     () =>
-      buildAllianceCandidateInsights({
-        availableRows: availableTeams,
-        captainSlots: allianceRuntime?.captainSlots ?? [],
-        currentCaptainKey: allianceCurrentCaptain?.captain ?? null,
-        eventRowMap,
-      }),
-    [allianceCurrentCaptain?.captain, allianceRuntime?.captainSlots, availableTeams, eventRowMap],
+      shouldComputePredictWorkbench
+        ? buildAllianceCandidateInsights({
+            availableRows: availableTeams,
+            captainSlots: allianceRuntime?.captainSlots ?? [],
+            currentCaptainKey: allianceCurrentCaptain?.captain ?? null,
+            eventRowMap,
+          })
+        : EMPTY_ARRAY,
+    [
+      allianceCurrentCaptain?.captain,
+      allianceRuntime?.captainSlots,
+      availableTeams,
+      eventRowMap,
+      shouldComputePredictWorkbench,
+    ],
   );
   const allianceAvailableRows = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     if (allianceSortMode === 'pickValue') {
       return [...allianceCandidateInsights].sort((a, b) => b.pickValueScore - a.pickValueScore);
     }
@@ -3440,36 +3590,39 @@ export default function HomePage() {
     }
     const insightMap = new Map(allianceCandidateInsights.map((row) => [row.teamKey, row]));
     return availableTeams.map((row) => insightMap.get(row.teamKey) ?? row);
-  }, [allianceCandidateInsights, allianceSortMode, availableTeams]);
+  }, [allianceCandidateInsights, allianceSortMode, availableTeams, shouldComputePredictWorkbench]);
   const allianceRecommendationRows = useMemo(
-    () => [
-      {
-        label: 'Build Us',
-        key: 'pickValueScore',
-        row: topInsightRows(allianceCandidateInsights, 'pickValueScore')[0] ?? null,
-      },
-      {
-        label: 'Best Fit',
-        key: 'chemistryScore',
-        row: topInsightRows(allianceCandidateInsights, 'chemistryScore')[0] ?? null,
-      },
-      {
-        label: 'Deny Rival',
-        key: 'denialValueScore',
-        row: topInsightRows(allianceCandidateInsights, 'denialValueScore')[0] ?? null,
-      },
-      {
-        label: 'Playoff Ready',
-        key: 'playoffReadyScore',
-        row: topInsightRows(allianceCandidateInsights, 'playoffReadyScore')[0] ?? null,
-      },
-      {
-        label: 'Highest Ceiling',
-        key: 'ceilingScore',
-        row: topInsightRows(allianceCandidateInsights, 'ceilingScore')[0] ?? null,
-      },
-    ],
-    [allianceCandidateInsights],
+    () =>
+      shouldComputePredictWorkbench
+        ? [
+            {
+              label: 'Build Us',
+              key: 'pickValueScore',
+              row: topInsightRows(allianceCandidateInsights, 'pickValueScore')[0] ?? null,
+            },
+            {
+              label: 'Best Fit',
+              key: 'chemistryScore',
+              row: topInsightRows(allianceCandidateInsights, 'chemistryScore')[0] ?? null,
+            },
+            {
+              label: 'Deny Rival',
+              key: 'denialValueScore',
+              row: topInsightRows(allianceCandidateInsights, 'denialValueScore')[0] ?? null,
+            },
+            {
+              label: 'Playoff Ready',
+              key: 'playoffReadyScore',
+              row: topInsightRows(allianceCandidateInsights, 'playoffReadyScore')[0] ?? null,
+            },
+            {
+              label: 'Highest Ceiling',
+              key: 'ceilingScore',
+              row: topInsightRows(allianceCandidateInsights, 'ceilingScore')[0] ?? null,
+            },
+          ]
+        : EMPTY_ARRAY,
+    [allianceCandidateInsights, shouldComputePredictWorkbench],
   );
   function reseedCaptainSlots(slots) {
     return slots.map((slot, idx) => ({ ...slot, seed: idx + 1 }));
@@ -3504,7 +3657,7 @@ export default function HomePage() {
   function handleAllianceAccept() {
     if (!alliancePickTarget || !allianceRuntime || !allianceCurrentCaptain) return;
     setAllianceLiveLocked(true);
-    let next = structuredClone(allianceRuntime);
+    let next = cloneDashboardValue(allianceRuntime);
     const target = alliancePickTarget;
     const targetCaptainIndex = next.captainSlots.findIndex((s) => s.captain === target);
     if (targetCaptainIndex >= 0) {
@@ -3551,31 +3704,43 @@ export default function HomePage() {
       createdAt: Date.now(),
       sourceType: allianceSourceType,
       sourceId: allianceSourceId,
-      sourceRows: allianceRuntime.sourceRows,
-      allianceState: allianceRuntime,
+      sourceRows: cloneDashboardValue(allianceRuntime.sourceRows),
+      allianceState: cloneDashboardValue(allianceRuntime),
     };
     setSavedAllianceScenarios((prev) => [scenario, ...prev]);
   }
   // Playoff lab
   const playoffLabAllianceState = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return null;
     if (playoffLabSourceType === 'alliance') {
       const scenario = savedAllianceScenarios.find((s) => s.id === playoffLabSourceId);
       return scenario?.allianceState ?? null;
     }
     return allianceRuntime;
-  }, [playoffLabSourceType, playoffLabSourceId, savedAllianceScenarios, allianceRuntime]);
+  }, [
+    allianceRuntime,
+    playoffLabSourceId,
+    playoffLabSourceType,
+    savedAllianceScenarios,
+    shouldComputePredictWorkbench,
+  ]);
   const playoffLabAlliances = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     const slots = playoffLabAllianceState?.captainSlots ?? [];
     return slots.map((slot) => ({
       seed: slot.seed,
       teams: [slot.captain, ...slot.picks],
     }));
-  }, [playoffLabAllianceState]);
+  }, [playoffLabAllianceState, shouldComputePredictWorkbench]);
   const impactSelectedMatch = useMemo(
-    () => sortedMatches.find((m) => m.key === impactSelectedMatchKey) ?? null,
-    [sortedMatches, impactSelectedMatchKey],
+    () =>
+      shouldComputePredictWorkbench
+        ? (sortedMatches.find((m) => m.key === impactSelectedMatchKey) ?? null)
+        : null,
+    [impactSelectedMatchKey, shouldComputePredictWorkbench, sortedMatches],
   );
   const impactScenarios = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     if (!impactSelectedMatch) return [];
     const ourKey = loadedTeam != null ? tbaTeamKey(loadedTeam) : '';
     const isRed = impactSelectedMatch.alliances.red.team_keys.includes(ourKey);
@@ -3583,7 +3748,7 @@ export default function HomePage() {
     const currentTotal = rankingsDerived.ourTotalRp ?? null;
     const scenarios = [];
     for (let rp = 0; rp <= 6; rp += 1) {
-      const local = structuredClone(predictOverrides);
+      const local = cloneDashboardValue(predictOverrides);
       local[impactSelectedMatch.key] = {
         redRp: isRed ? rp : 0,
         blueRp: isRed ? 0 : rp,
@@ -3636,6 +3801,7 @@ export default function HomePage() {
     eventTeamRows,
     rankingsDerived,
     eventRowMap,
+    shouldComputePredictWorkbench,
   ]);
   const activePickList = useMemo(
     () => pickLists.find((p) => p.id === activePickListId) ?? pickLists[0] ?? null,
@@ -4059,8 +4225,8 @@ export default function HomePage() {
       sourceId: playoffLabSourceId,
       simModel: playoffSimModel,
       simRuns: playoffSimRuns,
-      allianceState: structuredClone(playoffLabAllianceState),
-      manualWinners: structuredClone(playoffLabWinners),
+      allianceState: cloneDashboardValue(playoffLabAllianceState),
+      manualWinners: cloneDashboardValue(playoffLabWinners),
       manualSummary: manual,
       ourSummary: ourRow,
       allAllianceRows,
@@ -4085,7 +4251,7 @@ export default function HomePage() {
   function updateActivePickList(mutator) {
     if (!activePickList) return;
     setPickLists((prev) =>
-      prev.map((p) => (p.id === activePickList.id ? mutator(structuredClone(p)) : p)),
+      prev.map((p) => (p.id === activePickList.id ? mutator(cloneDashboardValue(p)) : p)),
     );
   }
   function addPickListEntry() {
@@ -4130,6 +4296,7 @@ export default function HomePage() {
     setLiveAlliancePulledAt(Date.now());
   }
   const liveAllianceAvailableTeams = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
     const sourceRows = liveAllianceRuntime?.sourceRows ?? [];
     const used = new Set(
       liveAllianceRuntime?.captainSlots?.flatMap((s) => [s.captain, ...s.picks]) ?? [],
@@ -4141,59 +4308,78 @@ export default function HomePage() {
       .filter((r) => r.teamKey !== currentCaptain)
       .filter((r) => !used.has(r.teamKey))
       .filter((r) => !declined.has(r.teamKey));
-  }, [liveAllianceRuntime]);
+  }, [liveAllianceRuntime, shouldComputePredictWorkbench]);
   const liveAllianceCurrentCaptain = useMemo(
     () =>
-      liveAllianceRuntime?.captainSlots?.[liveAllianceRuntime?.currentIndex ?? 0]?.captain ?? null,
-    [liveAllianceRuntime],
+      shouldComputePredictWorkbench
+        ? (liveAllianceRuntime?.captainSlots?.[liveAllianceRuntime?.currentIndex ?? 0]?.captain ??
+          null)
+        : null,
+    [liveAllianceRuntime, shouldComputePredictWorkbench],
   );
   const liveAllianceCandidateInsights = useMemo(
     () =>
-      buildAllianceCandidateInsights({
-        availableRows: liveAllianceAvailableTeams,
-        captainSlots: liveAllianceRuntime?.captainSlots ?? [],
-        currentCaptainKey: liveAllianceCurrentCaptain,
-        eventRowMap,
-      }),
+      shouldComputePredictWorkbench
+        ? buildAllianceCandidateInsights({
+            availableRows: liveAllianceAvailableTeams,
+            captainSlots: liveAllianceRuntime?.captainSlots ?? [],
+            currentCaptainKey: liveAllianceCurrentCaptain,
+            eventRowMap,
+          })
+        : EMPTY_ARRAY,
     [
       eventRowMap,
       liveAllianceAvailableTeams,
       liveAllianceCurrentCaptain,
       liveAllianceRuntime?.captainSlots,
+      shouldComputePredictWorkbench,
     ],
   );
   const pickDeskRuntime = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return null;
     if (liveAllianceRuntime?.captainSlots?.length) return liveAllianceRuntime;
     if (allianceRuntime?.captainSlots?.length) return allianceRuntime;
     return freshAllianceStateFromSource(
       [...eventTeamRows].sort((a, b) => Number(a.rank ?? 9999) - Number(b.rank ?? 9999)),
     );
-  }, [allianceRuntime, eventTeamRows, liveAllianceRuntime]);
+  }, [allianceRuntime, eventTeamRows, liveAllianceRuntime, shouldComputePredictWorkbench]);
   const pickDeskTakenTeams = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return new Set();
     const taken = new Set();
     (pickDeskRuntime?.captainSlots ?? []).forEach((slot) =>
       [slot.captain, ...(slot.picks ?? [])].forEach((teamKey) => taken.add(teamKey)),
     );
     return taken;
-  }, [pickDeskRuntime]);
+  }, [pickDeskRuntime, shouldComputePredictWorkbench]);
   const pickListCandidateInsights = useMemo(
     () =>
-      buildAllianceCandidateInsights({
-        availableRows: eventTeamRows.filter((row) => !pickDeskTakenTeams.has(row.teamKey)),
-        captainSlots: pickDeskRuntime?.captainSlots ?? [],
-        currentCaptainKey:
-          pickDeskRuntime?.captainSlots?.[pickDeskRuntime?.currentIndex ?? 0]?.captain ?? null,
-        eventRowMap,
-      }),
-    [eventRowMap, eventTeamRows, pickDeskRuntime, pickDeskTakenTeams],
+      shouldComputePredictWorkbench
+        ? buildAllianceCandidateInsights({
+            availableRows: eventTeamRows.filter((row) => !pickDeskTakenTeams.has(row.teamKey)),
+            captainSlots: pickDeskRuntime?.captainSlots ?? [],
+            currentCaptainKey:
+              pickDeskRuntime?.captainSlots?.[pickDeskRuntime?.currentIndex ?? 0]?.captain ?? null,
+            eventRowMap,
+          })
+        : EMPTY_ARRAY,
+    [
+      eventRowMap,
+      eventTeamRows,
+      pickDeskRuntime,
+      pickDeskTakenTeams,
+      shouldComputePredictWorkbench,
+    ],
   );
   const pickListInsightMap = useMemo(
-    () => new Map(pickListCandidateInsights.map((row) => [row.teamKey, row])),
-    [pickListCandidateInsights],
+    () =>
+      shouldComputePredictWorkbench
+        ? new Map(pickListCandidateInsights.map((row) => [row.teamKey, row]))
+        : new Map(),
+    [pickListCandidateInsights, shouldComputePredictWorkbench],
   );
   function handleLiveAllianceAccept() {
     if (!liveAllianceRuntime || !liveAlliancePickTarget) return;
-    let next = structuredClone(liveAllianceRuntime);
+    let next = cloneDashboardValue(liveAllianceRuntime);
     const currentCaptain = next.captainSlots[next.currentIndex];
     const target = liveAlliancePickTarget;
     const targetCaptainIndex = next.captainSlots.findIndex((s) => s.captain === target);
@@ -7141,7 +7327,7 @@ export default function HomePage() {
             </button>
             <button
               className="button"
-              onClick={() => setPredictOverrides(JSON.parse(JSON.stringify(predictBaseMap)))}
+              onClick={() => setPredictOverrides(cloneDashboardValue(predictBaseMap))}
             >
               Reset All To Live
             </button>

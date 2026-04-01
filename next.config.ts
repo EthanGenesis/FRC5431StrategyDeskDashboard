@@ -2,10 +2,34 @@ import type { NextConfig } from 'next';
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
+function buildSupabaseConnectSources(): string[] {
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!rawUrl) return [];
+
+  try {
+    const url = new URL(rawUrl);
+    return [url.origin, `wss://${url.host}`];
+  } catch {
+    return [];
+  }
+}
+
 function buildContentSecurityPolicy(): string {
-  const connectSources = isDevelopment
-    ? ["'self'", 'https:', 'http://localhost:*', 'ws://localhost:*']
-    : ["'self'", 'https:'];
+  const connectSources = Array.from(
+    new Set(
+      isDevelopment
+        ? [
+            "'self'",
+            'https:',
+            'http://localhost:*',
+            'http://127.0.0.1:*',
+            'ws://localhost:*',
+            'ws://127.0.0.1:*',
+            ...buildSupabaseConnectSources(),
+          ]
+        : ["'self'", 'https:', ...buildSupabaseConnectSources()],
+    ),
+  );
 
   const scriptSources = isDevelopment
     ? [
