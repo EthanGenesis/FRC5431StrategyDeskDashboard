@@ -70,6 +70,20 @@ export type PersistedSnapshotCacheRecord = {
   updatedAt: string;
 };
 
+export type PersistedBundleStatusRecord = {
+  bundleKey: string;
+  workspaceKey: SharedWorkspaceKey;
+  source: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+  scenarioId: string | null;
+  state: 'idle' | 'loading' | 'ready' | 'error';
+  generatedAt: string | null;
+  error: string | null;
+  meta: Record<string, unknown>;
+  updatedAt: string;
+};
+
 export type PersistedUpstreamCacheRecord = {
   cacheKey: string;
   source: string;

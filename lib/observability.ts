@@ -1,6 +1,8 @@
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { NextResponse } from 'next/server';
 
+import { recordPerfSample } from './route-audit-server';
+
 type RouteLogExtras = Record<string, unknown>;
 
 type RouteLogContext = {
@@ -68,6 +70,15 @@ function logEvent(level: LogLevel, event: string, payload: RouteLogExtras): void
       ...(typeof safePayload === 'object' && safePayload !== null ? safePayload : {}),
     }),
   );
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readPositiveInteger(value: unknown): number | null {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function beginRouteRequest(
@@ -138,6 +149,18 @@ export function routeJson<T>(
     status,
     durationMs,
     ...extras,
+  });
+
+  void recordPerfSample({
+    routeKey: context.route,
+    workspaceKey: readString(extras.workspaceKey),
+    eventKey: readString(extras.eventKey),
+    teamNumber: readPositiveInteger(extras.teamNumber),
+    scenarioId: readString(extras.scenarioId),
+    statusCode: status,
+    durationMs,
+    cacheState: readString(extras.cacheState ?? extras.cacheLayer),
+    meta: safeLogValue(extras) as Record<string, unknown>,
   });
 
   return response;

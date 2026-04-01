@@ -83,6 +83,7 @@ export default function DataSuperTab({
   savedPlayoffResults = [],
   compareSyncKey = 0,
   scope = 'current',
+  externalUpdateKey = 0,
 }) {
   const [superData, setSuperData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -157,10 +158,14 @@ export default function DataSuperTab({
       }
     }
     loadSuperData();
+    const id = window.setInterval(() => {
+      void loadSuperData();
+    }, 10000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [loadedEventKey, loadedTeam, compareRequestTeams]);
+  }, [compareRequestTeams, externalUpdateKey, loadedEventKey, loadedTeam]);
   useEffect(() => {
     setChartSource(scope === 'current' ? 'event_wide' : 'compare_historical');
     setChartMetric(scope === 'current' ? 'event_epa' : 'season_match_epa');

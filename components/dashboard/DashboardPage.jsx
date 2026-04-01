@@ -46,6 +46,11 @@ import {
   normalizeTranslationKey,
   translate,
 } from '../../lib/product-preferences';
+import {
+  normalizeSharedActiveTarget,
+  normalizeTeamEventCatalogEntry,
+  teamEventLabel,
+} from '../../lib/shared-target';
 
 function DeferredPanelPlaceholder({ label = 'Loading section...' }) {
   return (
@@ -88,6 +93,7 @@ const DistrictPointsTab = deferredPanel(
 const GameManualTab = deferredPanel(() => import('../GameManualTab'), 'Loading game manual...');
 
 const EVENT_SEARCH_YEAR = 2026;
+const OPEN_TAB_REFRESH_MS = 10_000;
 const AUDIO_PATTERN_BY_QUEUE = {
   QUEUE_5: [0],
   QUEUE_2: [0, 0.18],
@@ -226,6 +232,13 @@ function normalizeEventKey(value) {
 }
 function topInsightRows(rows, key) {
   return [...rows].sort((a, b) => Number(b?.[key] ?? 0) - Number(a?.[key] ?? 0)).slice(0, 3);
+}
+function hasAllianceRuntimeEdits(runtime) {
+  if (!runtime || typeof runtime !== 'object') return false;
+  if (Array.isArray(runtime?.declined) && runtime.declined.length) return true;
+  return Array.isArray(runtime?.captainSlots)
+    ? runtime.captainSlots.some((slot) => Array.isArray(slot?.picks) && slot.picks.length > 0)
+    : false;
 }
 function parseLocalDateOnly(value) {
   if (typeof value !== 'string' || !value) return null;
@@ -744,6 +757,17 @@ function isTypingTarget(target) {
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 }
 
+function buildEventSearchOptionFromTarget(target) {
+  return normalizeTeamEventCatalogEntry({
+    key: target?.eventKey,
+    name: target?.eventName || target?.eventShortName || target?.eventKey,
+    shortName: target?.eventShortName || target?.eventName || target?.eventKey,
+    location: target?.eventLocation || '',
+    startDate: target?.startDate ?? null,
+    endDate: target?.endDate ?? null,
+  });
+}
+
 export default function HomePage() {
   const MONTE_CARLO_SCENARIO_DEPTH = 12;
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -784,6 +808,10 @@ export default function HomePage() {
   const [eventSearchOptions, setEventSearchOptions] = useState([]);
   const [eventSearchOpen, setEventSearchOpen] = useState(false);
   const [eventSearchLoading, setEventSearchLoading] = useState(false);
+  const [selectedEventOption, setSelectedEventOption] = useState(null);
+  const [sharedTargetRefreshStatus, setSharedTargetRefreshStatus] = useState(null);
+  const [warmBundleManifest, setWarmBundleManifest] = useState([]);
+  const [bundleStatusSyncKey, setBundleStatusSyncKey] = useState(0);
   const [webhookDelivery, setWebhookDelivery] = useState({
     pending: false,
     lastSuccessAtMs: null,
@@ -808,6 +836,11 @@ export default function HomePage() {
   const [allianceLiveLocked, setAllianceLiveLocked] = useState(false);
   const [allianceSortMode, setAllianceSortMode] = useState('composite');
   const [mcScenarioSelection, setMcScenarioSelection] = useState('most_likely');
+  const [predictBundleHydrating, setPredictBundleHydrating] = useState(false);
+  const [allianceWarmBundle, setAllianceWarmBundle] = useState(null);
+  const [playoffWarmBundle, setPlayoffWarmBundle] = useState(null);
+  const [impactWarmBundle, setImpactWarmBundle] = useState(null);
+  const [pickListWarmBundle, setPickListWarmBundle] = useState(null);
   const [mcProjectionSnapshot, setMcProjectionSnapshot] = useState(null);
   const [mcProjectionDirty, setMcProjectionDirty] = useState(false);
   const [lastMcCompletedQualCount, setLastMcCompletedQualCount] = useState(0);
@@ -833,6 +866,8 @@ export default function HomePage() {
   const previousQueueStateRef = useRef(null);
   const previousOfflineModeRef = useRef(null);
   const snapshotHealthRef = useRef(null);
+  const skipNextAutoSnapshotRef = useRef(false);
+  const preferWarmSnapshotOnNextAutoLoadRef = useRef(false);
   const skipSharedSettingsSaveRef = useRef(false);
   const skipPredictSaveRef = useRef(false);
   const skipAllianceSaveRef = useRef(false);
@@ -1005,6 +1040,44 @@ export default function HomePage() {
   const visibleEventSearchOptions = eventSearchOptions.slice(0, 10);
   const showEventSearchResults =
     eventSearchOpen && (eventSearchLoading || visibleEventSearchOptions.length > 0);
+  const selectedEventSummary = useMemo(() => {
+    const selectedLabel = teamEventLabel(selectedEventOption);
+    if (selectedLabel) return selectedLabel;
+
+    const fallbackEventName =
+      snapshot?.tba?.event?.name ??
+      snapshot?.official?.event?.nameShort ??
+      snapshot?.official?.event?.name ??
+      '';
+    if (fallbackEventName && loadedEventKey) {
+      return `${fallbackEventName} (${loadedEventKey})`;
+    }
+
+    return '';
+  }, [
+    loadedEventKey,
+    selectedEventOption,
+    snapshot?.official?.event?.name,
+    snapshot?.official?.event?.nameShort,
+    snapshot?.tba?.event?.name,
+  ]);
+  const sharedTargetWarmSummary = useMemo(() => {
+    const parts = [];
+    const lastSuccessAt = sharedTargetRefreshStatus?.lastSuccessAt;
+    if (lastSuccessAt) {
+      parts.push(
+        `Shared target warmed ${formatLocalizedDateTime(lastSuccessAt, language, {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}`,
+      );
+    }
+    if (warmBundleManifest.length) {
+      const readyCount = warmBundleManifest.filter((item) => item?.state === 'ready').length;
+      parts.push(`${readyCount}/${warmBundleManifest.length} bundles ready`);
+    }
+    return parts.join(' • ');
+  }, [language, sharedTargetRefreshStatus?.lastSuccessAt, warmBundleManifest]);
   const loadedTeamOps = useMemo(
     () =>
       nexusSnapshot?.loadedTeamOps ??
@@ -1064,6 +1137,308 @@ export default function HomePage() {
     if (!predictWorkbenchSurfaceActive) return;
     setPredictWorkbenchReadyEventKey((prev) => (prev === loadedEventKey ? prev : loadedEventKey));
   }, [loadedEventKey, predictWorkbenchSurfaceActive]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!loadedEventKey || !loadedTeam || !predictForecastSurfaceActive || mcProjectionDirty) {
+      setPredictBundleHydrating(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setPredictBundleHydrating(true);
+
+    async function hydratePredictBundle() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/predict-bundle',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              eventKey: loadedEventKey,
+              teamNumber: loadedTeam,
+            }),
+            cache: 'no-store',
+          },
+          'Predict bundle hydration failed',
+        );
+        if (cancelled) return;
+        if (result?.payload?.monteCarloProjection) {
+          setMcProjectionSnapshot(result.payload.monteCarloProjection);
+          setLastMcCompletedQualCount(Number(result.payload.completedQualCount ?? 0));
+          setMcProjectionDirty(false);
+        }
+        if (!impactSelectedMatchKey && result?.payload?.defaultImpactMatchKey) {
+          setImpactSelectedMatchKey(result.payload.defaultImpactMatchKey);
+        }
+      } catch {
+        // Fall back to local predict computation when the warm bundle path is unavailable.
+      } finally {
+        if (!cancelled) setPredictBundleHydrating(false);
+      }
+    }
+
+    void hydratePredictBundle();
+    const id = window.setInterval(() => {
+      void hydratePredictBundle();
+    }, OPEN_TAB_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    bundleStatusSyncKey,
+    impactSelectedMatchKey,
+    loadedEventKey,
+    loadedTeam,
+    mcProjectionDirty,
+    predictForecastSurfaceActive,
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !loadedEventKey ||
+      !loadedTeam ||
+      majorTab !== 'PREDICT' ||
+      predictSubTab !== 'ALLIANCE' ||
+      allianceSourceType !== 'live' ||
+      allianceLiveLocked
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function hydrateAllianceBundle() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/alliance-bundle',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              eventKey: loadedEventKey,
+              teamNumber: loadedTeam,
+            }),
+            cache: 'no-store',
+          },
+          'Alliance bundle hydration failed',
+        );
+        if (cancelled || !result?.payload) return;
+        setAllianceWarmBundle(result.payload);
+        if (!allianceLiveLocked && result.payload.allianceState) {
+          setAllianceRuntime(cloneDashboardValue(result.payload.allianceState));
+        }
+      } catch {
+        // Fall back to local alliance calculations when the warm bundle path is unavailable.
+      }
+    }
+
+    void hydrateAllianceBundle();
+    const id = window.setInterval(() => {
+      void hydrateAllianceBundle();
+    }, OPEN_TAB_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    allianceLiveLocked,
+    allianceSourceType,
+    bundleStatusSyncKey,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    predictSubTab,
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !loadedEventKey ||
+      !loadedTeam ||
+      majorTab !== 'PREDICT' ||
+      predictSubTab !== 'PLAYOFF_LAB' ||
+      playoffLabSourceType !== 'live' ||
+      allianceLiveLocked ||
+      Object.keys(playoffLabWinners).length
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function hydratePlayoffBundle() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/playoff-bundle',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              eventKey: loadedEventKey,
+              teamNumber: loadedTeam,
+              model: playoffSimModel,
+              simRuns: playoffSimRuns,
+            }),
+            cache: 'no-store',
+          },
+          'Playoff bundle hydration failed',
+        );
+        if (cancelled || !result?.payload) return;
+        setPlayoffWarmBundle(result.payload);
+        if (!allianceLiveLocked && result.payload.allianceState) {
+          setAllianceRuntime(cloneDashboardValue(result.payload.allianceState));
+        }
+      } catch {
+        // Fall back to local playoff simulations when the warm bundle path is unavailable.
+      }
+    }
+
+    void hydratePlayoffBundle();
+    const id = window.setInterval(() => {
+      void hydratePlayoffBundle();
+    }, OPEN_TAB_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    allianceLiveLocked,
+    bundleStatusSyncKey,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    playoffLabSourceType,
+    playoffLabWinners,
+    playoffSimModel,
+    playoffSimRuns,
+    predictSubTab,
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!loadedEventKey || !loadedTeam || majorTab !== 'PREDICT' || predictSubTab !== 'IMPACT') {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function hydrateImpactBundle() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/impact-bundle',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              eventKey: loadedEventKey,
+              teamNumber: loadedTeam,
+            }),
+            cache: 'no-store',
+          },
+          'Impact bundle hydration failed',
+        );
+        if (cancelled || !result?.payload) return;
+        setImpactWarmBundle(result.payload);
+        if (!impactSelectedMatchKey && result.payload.selectedMatchKey) {
+          setImpactSelectedMatchKey(result.payload.selectedMatchKey);
+        }
+      } catch {
+        // Fall back to local impact calculations when the warm bundle path is unavailable.
+      }
+    }
+
+    void hydrateImpactBundle();
+    const id = window.setInterval(() => {
+      void hydrateImpactBundle();
+    }, OPEN_TAB_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    bundleStatusSyncKey,
+    impactSelectedMatchKey,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    predictSubTab,
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !loadedEventKey ||
+      !loadedTeam ||
+      majorTab !== 'PREDICT' ||
+      !['PICK_LIST', 'LIVE_ALLIANCE'].includes(predictSubTab)
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function hydratePickListBundle() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/pick-list-bundle',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              eventKey: loadedEventKey,
+              teamNumber: loadedTeam,
+            }),
+            cache: 'no-store',
+          },
+          'Pick list bundle hydration failed',
+        );
+        if (cancelled || !result?.payload) return;
+        setPickListWarmBundle(result.payload);
+        if (!hasAllianceRuntimeEdits(liveAllianceRuntime) && result.payload.pickDeskRuntime) {
+          setLiveAllianceRuntime(cloneDashboardValue(result.payload.pickDeskRuntime));
+          setLiveAlliancePulledAt(Date.now());
+        }
+      } catch {
+        // Fall back to local pick-list heuristics when the warm bundle path is unavailable.
+      }
+    }
+
+    void hydratePickListBundle();
+    const id = window.setInterval(() => {
+      void hydratePickListBundle();
+    }, OPEN_TAB_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    bundleStatusSyncKey,
+    liveAllianceRuntime,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    predictSubTab,
+  ]);
   useEffect(() => {
     resetDashboardBootDebug();
   }, [loadedEventKey]);
@@ -1125,15 +1500,6 @@ export default function HomePage() {
     },
     [nexusSnapshot],
   );
-  const chooseEventSearchOption = useCallback((option) => {
-    const nextKey = normalizeEventKey(option?.key);
-    if (!nextKey) return;
-    setDraftEventKey(nextKey);
-    setEventSearchOpen(false);
-    requestAnimationFrame(() => {
-      eventSearchInputRef.current?.focus?.();
-    });
-  }, []);
   const webhookContextFields = useCallback(
     (extraFields = []) =>
       [
@@ -1509,6 +1875,7 @@ export default function HomePage() {
     }));
   }, [loadedEventKey]);
   useEffect(() => {
+    let cancelled = false;
     const saved = loadSettings();
     const restoredTeam = Math.max(
       1,
@@ -1525,7 +1892,89 @@ export default function HomePage() {
       setLoadedEventKey(restoredEventKey);
     }
 
-    setLocalSettingsReady(true);
+    async function hydrateSharedTargetFallback() {
+      const fallback = await fetchJsonOrThrow(
+        '/api/active-target',
+        { cache: 'no-store' },
+        'Failed to load shared active target',
+      );
+      if (cancelled) return;
+
+      if (fallback?.refreshStatus) {
+        setSharedTargetRefreshStatus(fallback.refreshStatus);
+      }
+
+      const target = normalizeSharedActiveTarget(fallback?.target);
+      if (target.teamNumber && target.eventKey) {
+        const sharedOption = buildEventSearchOptionFromTarget(target);
+        preferWarmSnapshotOnNextAutoLoadRef.current = true;
+        setDraftTeam(target.teamNumber);
+        setDraftEventKey(target.eventKey);
+        setLoadedTeam(target.teamNumber);
+        setLoadedEventKey(target.eventKey);
+        setSelectedEventOption(sharedOption);
+        setSettings((prev) => ({
+          ...prev,
+          teamNumber: target.teamNumber,
+          eventKey: target.eventKey,
+        }));
+      }
+    }
+
+    async function hydrateSharedTarget() {
+      try {
+        const result = await fetchJsonOrThrow(
+          '/api/bootstrap',
+          { cache: 'no-store' },
+          'Failed to load bootstrap payload',
+        );
+        if (cancelled) return;
+
+        if (result?.refreshStatus) {
+          setSharedTargetRefreshStatus(result.refreshStatus);
+        }
+        if (Array.isArray(result?.bundleManifest)) {
+          setWarmBundleManifest(result.bundleManifest);
+        }
+
+        const target = normalizeSharedActiveTarget(result?.target);
+        if (target.teamNumber && target.eventKey) {
+          const sharedOption = buildEventSearchOptionFromTarget(target);
+          if (result?.snapshot) {
+            setSnapshot(result.snapshot);
+            skipNextAutoSnapshotRef.current = true;
+          } else {
+            preferWarmSnapshotOnNextAutoLoadRef.current = true;
+          }
+          setDraftTeam(target.teamNumber);
+          setDraftEventKey(target.eventKey);
+          setLoadedTeam(target.teamNumber);
+          setLoadedEventKey(target.eventKey);
+          setSelectedEventOption(sharedOption);
+          setSettings((prev) => ({
+            ...prev,
+            teamNumber: target.teamNumber,
+            eventKey: target.eventKey,
+          }));
+        } else {
+          await hydrateSharedTargetFallback();
+        }
+      } catch {
+        try {
+          await hydrateSharedTargetFallback();
+        } catch {
+          // Keep the local fallback boot path when the shared target service is unavailable.
+        }
+      } finally {
+        if (!cancelled) setLocalSettingsReady(true);
+      }
+    }
+
+    void hydrateSharedTarget();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => {
     if (!localSettingsReady) return;
@@ -1695,12 +2144,20 @@ export default function HomePage() {
     [],
   );
   const fetchSnapshot = useCallback(
-    async (team, eventKey, source = 'auto') => {
+    async (team, eventKey, source = 'auto', options = {}) => {
+      const preferWarm = Boolean(options?.preferWarm);
       setIsLoading(true);
       setErrorText('');
       try {
+        const params = new URLSearchParams({
+          team: String(team),
+          eventKey: String(eventKey),
+        });
+        if (preferWarm) {
+          params.set('warm', '1');
+        }
         const json = await fetchJsonOrThrow(
-          `/api/snapshot?team=${encodeURIComponent(String(team))}&eventKey=${encodeURIComponent(eventKey)}`,
+          `/api/snapshot?${params.toString()}`,
           { cache: 'no-store' },
           'Snapshot failed',
         );
@@ -1744,41 +2201,188 @@ export default function HomePage() {
     },
     [offlineMode, sendDiscordWebhookEvent, t],
   );
-  function handleLoad() {
-    const team = Number(draftTeam);
-    const eventKey = normalizeEventKey(draftEventKey);
-    if (!Number.isFinite(team) || team <= 0 || !eventKey) {
-      const message = 'Enter a valid team number and event key.';
-      setErrorText(message);
-      void sendDiscordWebhookEvent(
-        'warning',
-        t('webhook.event.warning.title', 'Important dashboard warning'),
-        message,
-      );
-      return;
-    }
-    setDraftTeam(team);
-    setDraftEventKey(eventKey);
-    setLoadedTeam(team);
-    setLoadedEventKey(eventKey);
-    setSettings((prev) => ({
-      ...prev,
+  const syncSharedActiveTarget = useCallback(async (team, eventKey, option = null) => {
+    const payload = {
       teamNumber: team,
       eventKey,
-    }));
-    setEventSearchOpen(false);
-    setSelectedMatchKey(null);
-    setSelectedTeamNumber(null);
-    setStrategyTarget(null);
-    setCurrentTeamProfileForcedTeamNumber(null);
-    setHistoricalTeamProfileForcedTeamNumber(null);
-    setPredictOverrides({});
-    fetchSnapshot(team, eventKey, 'manual');
+      eventName: option?.name ?? '',
+      eventShortName: option?.shortName ?? '',
+      eventLocation: option?.location ?? '',
+      startDate: option?.startDate ?? null,
+      endDate: option?.endDate ?? null,
+    };
+
+    const response = await fetchJsonOrThrow(
+      '/api/active-target',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      },
+      'Failed to save shared active target',
+    );
+    if (response?.refreshStatus) {
+      setSharedTargetRefreshStatus(response.refreshStatus);
+    }
+  }, []);
+  const refreshSharedActiveTarget = useCallback(async () => {
+    const response = await fetchJsonOrThrow(
+      '/api/refresh-active-target',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      'Failed to refresh shared active target',
+    );
+    if (response?.refreshStatus) {
+      setSharedTargetRefreshStatus(response.refreshStatus);
+    }
+    void fetchJsonOrThrow('/api/bootstrap', { cache: 'no-store' }, 'Failed to refresh bootstrap')
+      .then((bootstrap) => {
+        if (bootstrap?.refreshStatus) {
+          setSharedTargetRefreshStatus(bootstrap.refreshStatus);
+        }
+        if (Array.isArray(bootstrap?.bundleManifest)) {
+          setWarmBundleManifest(bootstrap.bundleManifest);
+        }
+      })
+      .catch(() => undefined);
+    return response;
+  }, []);
+  const loadDeskTarget = useCallback(
+    (
+      teamValue,
+      eventKeyValue,
+      { source = 'manual', option = null, syncShared = true, preferWarmSnapshot = false } = {},
+    ) => {
+      const team = Number(teamValue);
+      const eventKey = normalizeEventKey(eventKeyValue);
+      if (!Number.isFinite(team) || team <= 0 || !eventKey) {
+        const message = 'Enter a valid team number and event key.';
+        setErrorText(message);
+        void sendDiscordWebhookEvent(
+          'warning',
+          t('webhook.event.warning.title', 'Important dashboard warning'),
+          message,
+        );
+        return false;
+      }
+
+      const normalizedOption =
+        option && normalizeEventKey(option?.key) === eventKey
+          ? normalizeTeamEventCatalogEntry(option)
+          : selectedEventOption && normalizeEventKey(selectedEventOption.key) === eventKey
+            ? selectedEventOption
+            : null;
+      const retargeting =
+        Number(loadedTeam) !== team || normalizeEventKey(loadedEventKey) !== eventKey;
+
+      setDraftTeam(team);
+      setDraftEventKey(eventKey);
+      setLoadedTeam(team);
+      setLoadedEventKey(eventKey);
+      setSelectedEventOption(normalizedOption);
+      setWarmBundleManifest([]);
+      setSettings((prev) => ({
+        ...prev,
+        teamNumber: team,
+        eventKey,
+      }));
+      setEventSearchOpen(false);
+      setSelectedMatchKey(null);
+      setSelectedTeamNumber(null);
+      setStrategyTarget(null);
+      setCurrentTeamProfileForcedTeamNumber(null);
+      setHistoricalTeamProfileForcedTeamNumber(null);
+      setPredictOverrides({});
+      setAllianceWarmBundle(null);
+      setPlayoffWarmBundle(null);
+      setImpactWarmBundle(null);
+      setPickListWarmBundle(null);
+      setMcProjectionSnapshot(null);
+      setMcProjectionDirty(false);
+      setImpactSelectedMatchKey(null);
+      setAllianceLiveLocked(false);
+      setAllianceRuntime(null);
+      setLiveAllianceRuntime(null);
+      setLiveAlliancePulledAt(null);
+      setPlayoffLabWinners({});
+
+      if (syncShared) {
+        void syncSharedActiveTarget(team, eventKey, normalizedOption).catch(() => undefined);
+        const lastSharedRefreshMs = Date.parse(
+          String(sharedTargetRefreshStatus?.lastSuccessAt ?? ''),
+        );
+        const sharedRefreshFresh =
+          Number.isFinite(lastSharedRefreshMs) && Date.now() - lastSharedRefreshMs <= 45_000;
+        if (
+          retargeting ||
+          sharedTargetRefreshStatus?.state === 'error' ||
+          sharedTargetRefreshStatus?.state === 'idle' ||
+          !sharedRefreshFresh
+        ) {
+          void refreshSharedActiveTarget().catch(() => undefined);
+        }
+      }
+
+      if (retargeting) {
+        skipNextAutoSnapshotRef.current = true;
+      }
+      fetchSnapshot(team, eventKey, source === 'manual' ? 'manual' : 'auto', {
+        preferWarm: preferWarmSnapshot,
+      });
+      return true;
+    },
+    [
+      fetchSnapshot,
+      loadedEventKey,
+      loadedTeam,
+      refreshSharedActiveTarget,
+      selectedEventOption,
+      sendDiscordWebhookEvent,
+      sharedTargetRefreshStatus?.lastSuccessAt,
+      sharedTargetRefreshStatus?.state,
+      syncSharedActiveTarget,
+      t,
+    ],
+  );
+  function handleLoad() {
+    loadDeskTarget(draftTeam, draftEventKey, { source: 'manual' });
   }
+  const chooseEventSearchOption = useCallback(
+    (option) => {
+      const nextKey = normalizeEventKey(option?.key);
+      if (!nextKey) return;
+      const normalizedTeam = Math.floor(Number(draftTeam));
+      const normalizedOption = normalizeTeamEventCatalogEntry(option);
+      setDraftEventKey(nextKey);
+      setSelectedEventOption(normalizedOption);
+      setEventSearchOpen(false);
+      requestAnimationFrame(() => {
+        eventSearchInputRef.current?.focus?.();
+      });
+      if (Number.isFinite(normalizedTeam) && normalizedTeam > 0) {
+        loadDeskTarget(normalizedTeam, nextKey, {
+          source: 'manual',
+          option: normalizedOption,
+          syncShared: true,
+        });
+      }
+    },
+    [draftTeam, loadDeskTarget],
+  );
   useEffect(() => {
     const query = String(draftEventKey || '').trim();
     const teamNumber = Math.floor(Number(draftTeam));
     const hasTeamScope = Number.isFinite(teamNumber) && teamNumber > 0;
+    const selectedEventMatchesQuery =
+      selectedEventOption &&
+      normalizeEventKey(selectedEventOption.key) === normalizeEventKey(draftEventKey);
+    const effectiveQuery = hasTeamScope && selectedEventMatchesQuery ? '' : query;
     const shouldSearch = eventSearchOpen && (query.length >= 2 || hasTeamScope);
     if (!shouldSearch) {
       setEventSearchOptions([]);
@@ -1793,14 +2397,19 @@ export default function HomePage() {
       setEventSearchLoading(true);
 
       try {
-        const params = new URLSearchParams({
-          query,
-        });
+        const params = new URLSearchParams();
+        let endpoint = '/api/event-search';
         if (Number.isFinite(teamNumber) && teamNumber > 0) {
           params.set('team', String(teamNumber));
+          endpoint = '/api/team-events';
+          if (effectiveQuery) {
+            params.set('query', effectiveQuery);
+          }
+        } else {
+          params.set('query', query);
         }
         const result = await fetchJsonOrThrow(
-          `/api/event-search?${params.toString()}`,
+          `${endpoint}?${params.toString()}`,
           {
             cache: 'no-store',
             signal: controller.signal,
@@ -1823,10 +2432,23 @@ export default function HomePage() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [draftEventKey, draftTeam, eventSearchOpen]);
+  }, [draftEventKey, draftTeam, eventSearchOpen, selectedEventOption]);
+  useEffect(() => {
+    if (!selectedEventOption) return;
+    if (normalizeEventKey(selectedEventOption.key) === normalizeEventKey(draftEventKey)) return;
+    setSelectedEventOption(null);
+  }, [draftEventKey, selectedEventOption]);
   useEffect(() => {
     if (!loadedTeam || !loadedEventKey || offlineMode) return;
-    fetchSnapshot(loadedTeam, loadedEventKey, 'auto');
+    const preferWarmSnapshot = preferWarmSnapshotOnNextAutoLoadRef.current;
+    if (preferWarmSnapshot) {
+      preferWarmSnapshotOnNextAutoLoadRef.current = false;
+    }
+    if (skipNextAutoSnapshotRef.current) {
+      skipNextAutoSnapshotRef.current = false;
+    } else {
+      fetchSnapshot(loadedTeam, loadedEventKey, 'auto', { preferWarm: preferWarmSnapshot });
+    }
     const id = window.setInterval(
       () => fetchSnapshot(loadedTeam, loadedEventKey, 'auto'),
       clamp(settings.pollMs, 2000, 60000),
@@ -1875,10 +2497,114 @@ export default function HomePage() {
       }
     };
 
+    const normalizeBundleStatusPayload = (payload) => {
+      const row = payload?.new ?? payload?.record ?? payload?.old ?? null;
+      if (!row || typeof row !== 'object') return null;
+      const teamNumber = Number(row.team_number ?? row.teamNumber);
+      return {
+        bundleKey: String(row.bundle_key ?? row.bundleKey ?? '').trim(),
+        workspaceKey: String(row.workspace_key ?? row.workspaceKey ?? '').trim(),
+        source: String(row.source ?? '').trim(),
+        eventKey: String(row.event_key ?? row.eventKey ?? '').trim(),
+        teamNumber: Number.isFinite(teamNumber) && teamNumber > 0 ? Math.floor(teamNumber) : null,
+        scenarioId: String(row.scenario_id ?? row.scenarioId ?? '').trim() || null,
+        state: String(row.state ?? 'idle').trim() || 'idle',
+        generatedAt: String(row.generated_at ?? row.generatedAt ?? '').trim() || null,
+        updatedAt: String(row.updated_at ?? row.updatedAt ?? '').trim() || new Date().toISOString(),
+        meta: row.meta && typeof row.meta === 'object' ? row.meta : {},
+        error: row.error ?? null,
+      };
+    };
+
+    const mergeWarmBundleManifest = (nextStatus) => {
+      if (!nextStatus?.bundleKey) return;
+      setWarmBundleManifest((previous) => {
+        const next = previous.filter((item) => item?.bundleKey !== nextStatus.bundleKey);
+        next.push(nextStatus);
+        next.sort((left, right) =>
+          String(right?.updatedAt ?? '').localeCompare(String(left?.updatedAt ?? '')),
+        );
+        return next;
+      });
+    };
+
+    const openSurfaceShouldRefreshFromBundle = (status) => {
+      if (!status?.source || status.state === 'loading') return false;
+      if (status.eventKey && String(status.eventKey) !== String(loadedEventKey)) return false;
+      if (status.teamNumber != null && loadedTeam != null && status.teamNumber !== loadedTeam) {
+        return false;
+      }
+
+      if (status.source === 'predict_baseline') {
+        return predictForecastSurfaceActive && !mcProjectionDirty;
+      }
+      if (status.source === 'alliance_live') {
+        return (
+          majorTab === 'PREDICT' &&
+          predictSubTab === 'ALLIANCE' &&
+          allianceSourceType === 'live' &&
+          !allianceLiveLocked
+        );
+      }
+      if (status.source === 'playoff_live') {
+        return (
+          majorTab === 'PREDICT' &&
+          predictSubTab === 'PLAYOFF_LAB' &&
+          playoffLabSourceType === 'live' &&
+          !allianceLiveLocked &&
+          !Object.keys(playoffLabWinners).length
+        );
+      }
+      if (status.source === 'impact_live') {
+        return majorTab === 'PREDICT' && predictSubTab === 'IMPACT';
+      }
+      if (status.source === 'pick_list_live') {
+        return majorTab === 'PREDICT' && ['PICK_LIST', 'LIVE_ALLIANCE'].includes(predictSubTab);
+      }
+      if (status.source === 'compare_baseline' || status.source === 'compare_set') {
+        return (
+          (majorTab === 'CURRENT' && currentSubTab === 'COMPARE') ||
+          (majorTab === 'HISTORICAL' && historicalSubTab === 'COMPARE')
+        );
+      }
+      if (status.source === 'team_profile') {
+        return (
+          (majorTab === 'CURRENT' && currentSubTab === 'TEAM_PROFILE') ||
+          (majorTab === 'HISTORICAL' && historicalSubTab === 'TEAM_PROFILE')
+        );
+      }
+      if (status.source === 'data_super') {
+        return (
+          (majorTab === 'CURRENT' && currentSubTab === 'DATA') ||
+          (majorTab === 'HISTORICAL' && historicalSubTab === 'DATA')
+        );
+      }
+      if (status.source === 'district_points') {
+        return (
+          (majorTab === 'CURRENT' && currentSubTab === 'DISTRICT') ||
+          (majorTab === 'HISTORICAL' && historicalSubTab === 'DISTRICT')
+        );
+      }
+      return false;
+    };
+
     let channel = null;
     try {
       channel = client
         .channel(`workspace-live:${activeWorkspaceKey}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: PERSISTENCE_TABLES.bundleStatus },
+          (payload) => {
+            if (!matchesWorkspace(payload)) return;
+            const nextStatus = normalizeBundleStatusPayload(payload);
+            if (!nextStatus) return;
+            mergeWarmBundleManifest(nextStatus);
+            if (openSurfaceShouldRefreshFromBundle(nextStatus)) {
+              setBundleStatusSyncKey((value) => value + 1);
+            }
+          },
+        )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: PERSISTENCE_TABLES.workspaceSettings },
@@ -1969,7 +2695,22 @@ export default function HomePage() {
       cancelled = true;
       if (channel) void client.removeChannel(channel);
     };
-  }, [activeWorkspaceKey, fetchSnapshot, loadedEventKey, loadedTeam]);
+  }, [
+    activeWorkspaceKey,
+    allianceLiveLocked,
+    allianceSourceType,
+    currentSubTab,
+    fetchSnapshot,
+    historicalSubTab,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    mcProjectionDirty,
+    playoffLabSourceType,
+    playoffLabWinners,
+    predictForecastSurfaceActive,
+    predictSubTab,
+  ]);
   const sortedMatches = useMemo(() => sortMatches(snapshot?.tba?.matches ?? []), [snapshot]);
   const sbMatchMap = useMemo(() => {
     const map = new Map();
@@ -3304,6 +4045,7 @@ export default function HomePage() {
   }, [loadedEventKey]);
   useEffect(() => {
     if (!shouldComputePredictForecast) return;
+    if (predictBundleHydrating) return;
     if (!mcProjectionSnapshot && eventTeamRows.length) {
       const computed = computeMonteCarloProjection();
       setMcProjectionSnapshot(computed);
@@ -3316,6 +4058,7 @@ export default function HomePage() {
     eventTeamRows.length,
     loadedEventKey,
     mcProjectionSnapshot,
+    predictBundleHydrating,
     shouldComputePredictForecast,
   ]);
   useEffect(() => {
@@ -3741,6 +4484,12 @@ export default function HomePage() {
   );
   const impactScenarios = useMemo(() => {
     if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
+    if (
+      impactWarmBundle?.selectedMatchKey &&
+      (!impactSelectedMatchKey || impactWarmBundle.selectedMatchKey === impactSelectedMatchKey)
+    ) {
+      return impactWarmBundle.scenarios ?? EMPTY_ARRAY;
+    }
     if (!impactSelectedMatch) return [];
     const ourKey = loadedTeam != null ? tbaTeamKey(loadedTeam) : '';
     const isRed = impactSelectedMatch.alliances.red.team_keys.includes(ourKey);
@@ -3793,6 +4542,7 @@ export default function HomePage() {
     return scenarios;
   }, [
     impactSelectedMatch,
+    impactSelectedMatchKey,
     loadedTeam,
     predictOverrides,
     currentTotalsMap,
@@ -3801,6 +4551,7 @@ export default function HomePage() {
     eventTeamRows,
     rankingsDerived,
     eventRowMap,
+    impactWarmBundle,
     shouldComputePredictWorkbench,
   ]);
   const activePickList = useMemo(
@@ -4338,11 +5089,20 @@ export default function HomePage() {
   const pickDeskRuntime = useMemo(() => {
     if (!shouldComputePredictWorkbench) return null;
     if (liveAllianceRuntime?.captainSlots?.length) return liveAllianceRuntime;
+    if (pickListWarmBundle?.pickDeskRuntime && !hasAllianceRuntimeEdits(liveAllianceRuntime)) {
+      return pickListWarmBundle.pickDeskRuntime;
+    }
     if (allianceRuntime?.captainSlots?.length) return allianceRuntime;
     return freshAllianceStateFromSource(
       [...eventTeamRows].sort((a, b) => Number(a.rank ?? 9999) - Number(b.rank ?? 9999)),
     );
-  }, [allianceRuntime, eventTeamRows, liveAllianceRuntime, shouldComputePredictWorkbench]);
+  }, [
+    allianceRuntime,
+    eventTeamRows,
+    liveAllianceRuntime,
+    pickListWarmBundle,
+    shouldComputePredictWorkbench,
+  ]);
   const pickDeskTakenTeams = useMemo(() => {
     if (!shouldComputePredictWorkbench) return new Set();
     const taken = new Set();
@@ -4351,25 +5111,32 @@ export default function HomePage() {
     );
     return taken;
   }, [pickDeskRuntime, shouldComputePredictWorkbench]);
-  const pickListCandidateInsights = useMemo(
-    () =>
-      shouldComputePredictWorkbench
-        ? buildAllianceCandidateInsights({
-            availableRows: eventTeamRows.filter((row) => !pickDeskTakenTeams.has(row.teamKey)),
-            captainSlots: pickDeskRuntime?.captainSlots ?? [],
-            currentCaptainKey:
-              pickDeskRuntime?.captainSlots?.[pickDeskRuntime?.currentIndex ?? 0]?.captain ?? null,
-            eventRowMap,
-          })
-        : EMPTY_ARRAY,
-    [
+  const pickListCandidateInsights = useMemo(() => {
+    if (!shouldComputePredictWorkbench) return EMPTY_ARRAY;
+    if (
+      pickListWarmBundle?.candidateInsights &&
+      !hasAllianceRuntimeEdits(liveAllianceRuntime) &&
+      !hasAllianceRuntimeEdits(allianceRuntime)
+    ) {
+      return pickListWarmBundle.candidateInsights;
+    }
+    return buildAllianceCandidateInsights({
+      availableRows: eventTeamRows.filter((row) => !pickDeskTakenTeams.has(row.teamKey)),
+      captainSlots: pickDeskRuntime?.captainSlots ?? [],
+      currentCaptainKey:
+        pickDeskRuntime?.captainSlots?.[pickDeskRuntime?.currentIndex ?? 0]?.captain ?? null,
       eventRowMap,
-      eventTeamRows,
-      pickDeskRuntime,
-      pickDeskTakenTeams,
-      shouldComputePredictWorkbench,
-    ],
-  );
+    });
+  }, [
+    allianceRuntime,
+    eventRowMap,
+    eventTeamRows,
+    liveAllianceRuntime,
+    pickDeskRuntime,
+    pickDeskTakenTeams,
+    pickListWarmBundle,
+    shouldComputePredictWorkbench,
+  ]);
   const pickListInsightMap = useMemo(
     () =>
       shouldComputePredictWorkbench
@@ -4543,13 +5310,24 @@ export default function HomePage() {
               className="input mono dashboard-inline-input"
               type="number"
               value={draftTeam}
-              onChange={(e) => setDraftTeam(Number(e.target.value))}
+              onChange={(e) => {
+                const nextTeam = Number(e.target.value);
+                setDraftTeam(nextTeam);
+                if (Number.isFinite(nextTeam) && nextTeam > 0) {
+                  setEventSearchOpen(true);
+                }
+              }}
               onKeyDown={(event) => handleActionInputKeyDown(event, handleLoad)}
               aria-label={t('field.team', 'Team')}
               placeholder={t('field.team', 'Team')}
             />
             <div
               className="dashboard-event-search-shell"
+              style={
+                selectedEventSummary || sharedTargetWarmSummary
+                  ? { paddingBottom: showEventSearchResults ? 0 : 18 }
+                  : undefined
+              }
               onBlur={(event) => {
                 if (event.currentTarget.contains(event.relatedTarget)) return;
                 window.setTimeout(() => setEventSearchOpen(false), 90);
@@ -4561,6 +5339,12 @@ export default function HomePage() {
                 value={draftEventKey}
                 onChange={(e) => {
                   setDraftEventKey(e.target.value);
+                  if (
+                    selectedEventOption &&
+                    normalizeEventKey(selectedEventOption.key) !== normalizeEventKey(e.target.value)
+                  ) {
+                    setSelectedEventOption(null);
+                  }
                   setEventSearchOpen(true);
                 }}
                 onFocus={() => setEventSearchOpen(true)}
@@ -4569,6 +5353,24 @@ export default function HomePage() {
                 placeholder={t('field.event', 'Event')}
                 autoComplete="off"
               />
+              {selectedEventSummary || sharedTargetWarmSummary ? (
+                <div
+                  className="muted"
+                  style={{
+                    fontSize: 11,
+                    maxWidth: 240,
+                    pointerEvents: 'none',
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                  }}
+                >
+                  {selectedEventSummary ? selectedEventSummary : sharedTargetWarmSummary}
+                  {selectedEventSummary && sharedTargetWarmSummary
+                    ? ` • ${sharedTargetWarmSummary}`
+                    : null}
+                </div>
+              ) : null}
               {showEventSearchResults ? (
                 <div className="dashboard-event-search-results panel">
                   <div className="dashboard-event-search-results-header">
@@ -4591,7 +5393,7 @@ export default function HomePage() {
                           className="button button-subtle dashboard-event-option"
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            chooseEventSearchOption(option);
+                            void chooseEventSearchOption(option);
                           }}
                         >
                           <div style={{ fontWeight: 800 }}>{option.shortName || option.name}</div>
@@ -7869,6 +8671,20 @@ export default function HomePage() {
     );
   }
   function renderAllianceTab() {
+    const visibleAllianceRows =
+      allianceSourceType === 'live' &&
+      !allianceLiveLocked &&
+      Array.isArray(allianceWarmBundle?.availableRows) &&
+      allianceWarmBundle.availableRows.length
+        ? allianceWarmBundle.availableRows
+        : allianceAvailableRows;
+    const visibleAllianceRecommendations =
+      allianceSourceType === 'live' &&
+      !allianceLiveLocked &&
+      Array.isArray(allianceWarmBundle?.recommendationRows) &&
+      allianceWarmBundle.recommendationRows.length
+        ? allianceWarmBundle.recommendationRows
+        : allianceRecommendationRows;
     const allianceCaptainRows = (allianceRuntime?.captainSlots ?? []).map((slot) => {
       const rows = [slot.captain, ...slot.picks]
         .map((teamKey) => eventRowMap.get(teamKey))
@@ -7881,7 +8697,7 @@ export default function HomePage() {
         picks: slot.picks.length,
       };
     });
-    const allianceAvailabilityRows = allianceAvailableRows.slice(0, 24).map((row) => ({
+    const allianceAvailabilityRows = visibleAllianceRows.slice(0, 24).map((row) => ({
       label: `${row.teamNumber ?? teamNumberFromKey(row.teamKey) ?? row.teamKey}`,
       rank: row.realRank ?? row.simRank ?? null,
       epa: row.overallEpa ?? null,
@@ -7895,7 +8711,7 @@ export default function HomePage() {
       ceiling: row.ceilingScore ?? null,
       stable: row.stabilityScore ?? null,
     }));
-    const allianceStrengthVsRankRows = allianceAvailableRows.slice(0, 24).map((row) => ({
+    const allianceStrengthVsRankRows = visibleAllianceRows.slice(0, 24).map((row) => ({
       label: `${row.teamNumber ?? teamNumberFromKey(row.teamKey) ?? row.teamKey}`,
       rank: row.realRank ?? row.simRank ?? null,
       epa: row.overallEpa ?? null,
@@ -8053,7 +8869,7 @@ export default function HomePage() {
                   style={{ width: '100%' }}
                 >
                   <option value="">Choose invite target</option>
-                  {allianceAvailableRows.map((row) => (
+                  {visibleAllianceRows.map((row) => (
                     <option key={row.teamKey} value={row.teamKey}>
                       {row.teamKey} | Real Rank {row.realRank ?? '—'} | EPA {fmt(row.overallEpa, 1)}{' '}
                       | Pick {fmt(row.pickValueScore, 0)} | Fit {fmt(row.chemistryScore, 0)} | Deny{' '}
@@ -8101,7 +8917,7 @@ export default function HomePage() {
                 marginBottom: 10,
               }}
             >
-              {allianceRecommendationRows.map((item) => (
+              {visibleAllianceRecommendations.map((item) => (
                 <div key={item.label} className="panel-2" style={{ padding: 10 }}>
                   <div className="muted" style={{ fontSize: 12 }}>
                     {item.label}
@@ -8125,7 +8941,7 @@ export default function HomePage() {
               ))}
             </div>
             <div className="stack-8" style={{ maxHeight: 400, overflow: 'auto' }}>
-              {allianceAvailableRows.map((row) => (
+              {visibleAllianceRows.map((row) => (
                 <div key={row.teamKey} className="panel-2" style={{ padding: 10 }}>
                   <div
                     style={{
@@ -8239,17 +9055,24 @@ export default function HomePage() {
     );
   }
   function renderPlayoffLabTab() {
-    const bracket = buildPlayoffLabBracket(playoffLabAlliances, playoffLabWinners);
-    const simSummary = simulatePlayoffScenario(
-      playoffLabAllianceState,
-      playoffSimRuns,
-      playoffSimModel,
-    );
-    const allAllianceRows = simulatePlayoffAlliancesSummary(
-      playoffLabAllianceState,
-      playoffSimRuns,
-      playoffSimModel,
-    );
+    const useWarmPlayoffBundle =
+      playoffLabSourceType === 'live' &&
+      !allianceLiveLocked &&
+      !Object.keys(playoffLabWinners).length &&
+      playoffWarmBundle?.model === playoffSimModel &&
+      Number(playoffWarmBundle?.simRuns) === Number(playoffSimRuns);
+    const bracket =
+      useWarmPlayoffBundle && playoffWarmBundle?.bracket
+        ? playoffWarmBundle.bracket
+        : buildPlayoffLabBracket(playoffLabAlliances, playoffLabWinners);
+    const simSummary =
+      useWarmPlayoffBundle && playoffWarmBundle?.simSummary
+        ? playoffWarmBundle.simSummary
+        : simulatePlayoffScenario(playoffLabAllianceState, playoffSimRuns, playoffSimModel);
+    const allAllianceRows =
+      useWarmPlayoffBundle && Array.isArray(playoffWarmBundle?.allAllianceRows)
+        ? playoffWarmBundle.allAllianceRows
+        : simulatePlayoffAlliancesSummary(playoffLabAllianceState, playoffSimRuns, playoffSimModel);
     const ourAllianceOdds = allAllianceRows.find((row) => row.isUs) ?? null;
     const playoffOddsChartRows = allAllianceRows.map((row) => ({
       label: `A${row.seed}`,
@@ -9779,6 +10602,7 @@ export default function HomePage() {
         onOpenStrategy={openStrategyTarget}
         onAddToCompare={addTeamToCompare}
         scope={scope}
+        externalUpdateKey={bundleStatusSyncKey}
       />
     );
   }
@@ -9789,7 +10613,8 @@ export default function HomePage() {
         loadedTeam={loadedTeam}
         eventTeamRows={eventTeamRows}
         externalUpdateKey={
-          scope === 'historical' ? historicalCompareSyncKey : currentCompareSyncKey
+          (scope === 'historical' ? historicalCompareSyncKey : currentCompareSyncKey) +
+          bundleStatusSyncKey
         }
         onOpenTeamProfile={openTeamProfile}
         scope={scope}
@@ -10404,12 +11229,18 @@ export default function HomePage() {
         savedPlayoffResults={savedPlayoffResults}
         compareSyncKey={scope === 'historical' ? historicalCompareSyncKey : currentCompareSyncKey}
         scope={scope}
+        externalUpdateKey={bundleStatusSyncKey}
       />
     );
   }
   function renderDistrictTab(scope = 'current') {
     return (
-      <DistrictPointsTab scope={scope} loadedEventKey={loadedEventKey} loadedTeam={loadedTeam} />
+      <DistrictPointsTab
+        scope={scope}
+        loadedEventKey={loadedEventKey}
+        loadedTeam={loadedTeam}
+        externalUpdateKey={bundleStatusSyncKey}
+      />
     );
   }
   function renderActiveContent() {

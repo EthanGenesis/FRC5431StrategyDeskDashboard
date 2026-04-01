@@ -269,26 +269,31 @@ async function replaceNamedArtifactsForWorkspace(
 export async function loadWorkspaceSettings(
   workspaceKey: string | null | undefined,
 ): Promise<WorkspaceSettingsState> {
+  const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
   const client = getBrowserClient();
   if (!client) {
-    const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
     return (
       fallbackWorkspaceSettings.get(scopedWorkspaceKey) ?? pickWorkspaceSettings(DEFAULT_SETTINGS)
     );
   }
-  const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
 
-  const response = await client
-    .from(PERSISTENCE_TABLES.workspaceSettings)
-    .select('payload')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .maybeSingle();
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.workspaceSettings)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .maybeSingle();
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return normalizeWorkspaceSettingsPayload(response.data?.payload);
+  } catch {
+    return (
+      fallbackWorkspaceSettings.get(scopedWorkspaceKey) ?? pickWorkspaceSettings(DEFAULT_SETTINGS)
+    );
   }
-
-  return normalizeWorkspaceSettingsPayload(response.data?.payload);
 }
 
 export async function saveWorkspaceSettings(
@@ -302,17 +307,22 @@ export async function saveWorkspaceSettings(
     fallbackWorkspaceSettings.set(scopedWorkspaceKey, workspaceSettings);
     return;
   }
-  const { error } = await client.from(PERSISTENCE_TABLES.workspaceSettings).upsert(
-    {
-      workspace_key: scopedWorkspaceKey,
-      payload: workspaceSettings,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'workspace_key' },
-  );
 
-  if (error) {
-    throw new Error(error.message);
+  try {
+    const { error } = await client.from(PERSISTENCE_TABLES.workspaceSettings).upsert(
+      {
+        workspace_key: scopedWorkspaceKey,
+        payload: workspaceSettings,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'workspace_key' },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch {
+    fallbackWorkspaceSettings.set(scopedWorkspaceKey, workspaceSettings);
   }
 }
 
@@ -320,8 +330,8 @@ export async function loadCompareDraftForScope(
   scope: CompareDraftScope,
   workspaceKey: string | null | undefined,
 ): Promise<CompareDraft> {
-  const client = getBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
   if (!client) {
     return normalizeCompareDraft(
       fallbackCompareDrafts.get(
@@ -330,18 +340,26 @@ export async function loadCompareDraftForScope(
     );
   }
 
-  const response = await client
-    .from(PERSISTENCE_TABLES.compareDrafts)
-    .select('payload')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .eq('scope', scope)
-    .maybeSingle();
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.compareDrafts)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .eq('scope', scope)
+      .maybeSingle();
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return normalizeCompareDraft((response.data?.payload ?? null) as CompareDraft | null);
+  } catch {
+    return normalizeCompareDraft(
+      fallbackCompareDrafts.get(
+        storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
+      ),
+    );
   }
-
-  return normalizeCompareDraft((response.data?.payload ?? null) as CompareDraft | null);
 }
 
 export async function saveCompareDraftForScope(
@@ -359,19 +377,27 @@ export async function saveCompareDraftForScope(
     );
     return;
   }
-  const { error } = await client.from(PERSISTENCE_TABLES.compareDrafts).upsert(
-    {
-      id: storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
-      workspace_key: scopedWorkspaceKey,
-      scope,
-      payload: normalizedDraft,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'id' },
-  );
 
-  if (error) {
-    throw new Error(error.message);
+  try {
+    const { error } = await client.from(PERSISTENCE_TABLES.compareDrafts).upsert(
+      {
+        id: storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
+        workspace_key: scopedWorkspaceKey,
+        scope,
+        payload: normalizedDraft,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch {
+    fallbackCompareDrafts.set(
+      storageIdForWorkspace(scopedWorkspaceKey, `compare_draft_${scope}`),
+      normalizedDraft,
+    );
   }
 }
 
@@ -410,25 +436,31 @@ export async function addTeamToCompareDraftShared(
 export async function loadCompareSetsShared(
   workspaceKey: string | null | undefined,
 ): Promise<CompareSet[]> {
-  const client = getBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
   if (!client) {
     return normalizeNamedArtifactArray<CompareSet>(
       getFallbackNamedArtifactStore(PERSISTENCE_TABLES.compareSets).get(scopedWorkspaceKey) ?? [],
     );
   }
 
-  const response = await client
-    .from(PERSISTENCE_TABLES.compareSets)
-    .select('payload')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .order('updated_at', { ascending: false });
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.compareSets)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .order('updated_at', { ascending: false });
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return normalizeNamedArtifactArray<CompareSet>(extractPayloadArray(response.data));
+  } catch {
+    return normalizeNamedArtifactArray<CompareSet>(
+      getFallbackNamedArtifactStore(PERSISTENCE_TABLES.compareSets).get(scopedWorkspaceKey) ?? [],
+    );
   }
-
-  return normalizeNamedArtifactArray<CompareSet>(extractPayloadArray(response.data));
 }
 
 export async function saveCompareSetsShared(
@@ -443,32 +475,45 @@ export async function saveCompareSetsShared(
     );
     return;
   }
-  await replaceNamedArtifactsForWorkspace(PERSISTENCE_TABLES.compareSets, workspaceKey, sets);
+  try {
+    await replaceNamedArtifactsForWorkspace(PERSISTENCE_TABLES.compareSets, workspaceKey, sets);
+  } catch {
+    getFallbackNamedArtifactStore(PERSISTENCE_TABLES.compareSets).set(
+      scopedWorkspaceKey,
+      sortByUpdatedDescending(sets),
+    );
+  }
 }
 
 export async function loadNamedArtifactsShared<T extends NamedArtifact>(
   table: NamedArtifactTable,
   workspaceKey: string | null | undefined,
 ): Promise<T[]> {
-  const client = getBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
   if (!client) {
     return normalizeNamedArtifactArray<T>(
       getFallbackNamedArtifactStore(table).get(scopedWorkspaceKey) ?? [],
     );
   }
 
-  const response = await client
-    .from(table)
-    .select('payload')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .order('updated_at', { ascending: false });
+  try {
+    const response = await client
+      .from(table)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .order('updated_at', { ascending: false });
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return normalizeNamedArtifactArray<T>(extractPayloadArray(response.data));
+  } catch {
+    return normalizeNamedArtifactArray<T>(
+      getFallbackNamedArtifactStore(table).get(scopedWorkspaceKey) ?? [],
+    );
   }
-
-  return normalizeNamedArtifactArray<T>(extractPayloadArray(response.data));
 }
 
 export async function saveNamedArtifactsShared<T extends NamedArtifact>(
@@ -481,7 +526,11 @@ export async function saveNamedArtifactsShared<T extends NamedArtifact>(
     getFallbackNamedArtifactStore(table).set(scopedWorkspaceKey, sortByUpdatedDescending(items));
     return;
   }
-  await replaceNamedArtifactsForWorkspace(table, workspaceKey, items);
+  try {
+    await replaceNamedArtifactsForWorkspace(table, workspaceKey, items);
+  } catch {
+    getFallbackNamedArtifactStore(table).set(scopedWorkspaceKey, sortByUpdatedDescending(items));
+  }
 }
 
 export async function getStrategyRecordShared(
@@ -495,25 +544,29 @@ export async function getStrategyRecordByIdShared(
   workspaceKey: string | null | undefined,
   id: string,
 ): Promise<StrategyRecord | null> {
-  const client = getBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
   if (!client) {
     return fallbackStrategyRecords.get(storageIdForWorkspace(scopedWorkspaceKey, id)) ?? null;
   }
 
-  const response = await client
-    .from(PERSISTENCE_TABLES.strategyRecords)
-    .select('payload')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .eq('id', id)
-    .maybeSingle();
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.strategyRecords)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .eq('id', id)
+      .maybeSingle();
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    const payload: unknown = isRecord(response.data) ? response.data.payload : null;
+    return isRecord(payload) ? (payload as StrategyRecord) : null;
+  } catch {
+    return fallbackStrategyRecords.get(storageIdForWorkspace(scopedWorkspaceKey, id)) ?? null;
   }
-
-  const payload: unknown = isRecord(response.data) ? response.data.payload : null;
-  return isRecord(payload) ? (payload as StrategyRecord) : null;
 }
 
 export async function saveStrategyRecordShared(record: StrategyRecord): Promise<void> {
@@ -523,31 +576,36 @@ export async function saveStrategyRecordShared(record: StrategyRecord): Promise<
     fallbackStrategyRecords.set(storageIdForWorkspace(scopedWorkspaceKey, record.id), record);
     return;
   }
-  const { error } = await client.from(PERSISTENCE_TABLES.strategyRecords).upsert(
-    {
-      id: record.id,
-      workspace_key: scopedWorkspaceKey,
-      event_key: record.eventKey,
-      match_key: record.matchKey,
-      match_label: record.matchLabel,
-      event_name: record.eventName,
-      payload: record as WorkspaceArtifact,
-      created_at: toIsoTimestamp(record.createdAtMs),
-      updated_at: toIsoTimestamp(record.updatedAtMs),
-    },
-    { onConflict: 'id' },
-  );
 
-  if (error) {
-    throw new Error(error.message);
+  try {
+    const { error } = await client.from(PERSISTENCE_TABLES.strategyRecords).upsert(
+      {
+        id: record.id,
+        workspace_key: scopedWorkspaceKey,
+        event_key: record.eventKey,
+        match_key: record.matchKey,
+        match_label: record.matchLabel,
+        event_name: record.eventName,
+        payload: record as WorkspaceArtifact,
+        created_at: toIsoTimestamp(record.createdAtMs),
+        updated_at: toIsoTimestamp(record.updatedAtMs),
+      },
+      { onConflict: 'id' },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch {
+    fallbackStrategyRecords.set(storageIdForWorkspace(scopedWorkspaceKey, record.id), record);
   }
 }
 
 export async function listStrategyRecordsShared(
   workspaceKey: string | null | undefined,
 ): Promise<StrategyRecordSummary[]> {
-  const client = getBrowserClient();
   const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
   if (!client) {
     return [...fallbackStrategyRecords.entries()]
       .filter(([id]) => id.startsWith(`${scopedWorkspaceKey}::`))
@@ -565,26 +623,43 @@ export async function listStrategyRecordsShared(
       }));
   }
 
-  const response = await client
-    .from(PERSISTENCE_TABLES.strategyRecords)
-    .select('payload, updated_at')
-    .eq('workspace_key', scopedWorkspaceKey)
-    .order('updated_at', { ascending: false });
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.strategyRecords)
+      .select('payload, updated_at')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .order('updated_at', { ascending: false });
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return extractPayloadArray(response.data)
+      .filter((row): row is StrategyRecord => isRecord(row))
+      .map((row) => ({
+        id: row.id,
+        eventKey: row.eventKey,
+        matchKey: row.matchKey,
+        matchLabel: row.matchLabel,
+        eventName: row.eventName,
+        status: row.status,
+        updatedAtMs: row.updatedAtMs,
+        allianceTeams: row.allianceTeams,
+      }));
+  } catch {
+    return [...fallbackStrategyRecords.entries()]
+      .filter(([id]) => id.startsWith(`${scopedWorkspaceKey}::`))
+      .map(([, row]) => row)
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+      .map((row) => ({
+        id: row.id,
+        eventKey: row.eventKey,
+        matchKey: row.matchKey,
+        matchLabel: row.matchLabel,
+        eventName: row.eventName,
+        status: row.status,
+        updatedAtMs: row.updatedAtMs,
+        allianceTeams: row.allianceTeams,
+      }));
   }
-
-  return extractPayloadArray(response.data)
-    .filter((row): row is StrategyRecord => isRecord(row))
-    .map((row) => ({
-      id: row.id,
-      eventKey: row.eventKey,
-      matchKey: row.matchKey,
-      matchLabel: row.matchLabel,
-      eventName: row.eventName,
-      status: row.status,
-      updatedAtMs: row.updatedAtMs,
-      allianceTeams: row.allianceTeams,
-    }));
 }

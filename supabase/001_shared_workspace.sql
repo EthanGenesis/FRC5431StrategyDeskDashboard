@@ -15,6 +15,87 @@ create table if not exists public.tbsb_workspace_settings (
   updated_by uuid references auth.users (id) on delete set null
 );
 
+create table if not exists public.tbsb_active_target (
+  workspace_key text primary key default 'shared',
+  season_year integer not null default 2026,
+  team_number integer,
+  event_key text not null default '',
+  event_name text not null default '',
+  event_short_name text not null default '',
+  event_location text not null default '',
+  start_date date,
+  end_date date,
+  last_snapshot_generated_at timestamptz,
+  last_event_context_generated_at timestamptz,
+  last_team_catalog_generated_at timestamptz,
+  last_refreshed_at timestamptz,
+  refresh_state text not null default 'idle' check (refresh_state in ('idle', 'loading', 'ready', 'error')),
+  refresh_error text,
+  updated_at timestamptz not null default timezone('utc', now()),
+  updated_by uuid references auth.users (id) on delete set null
+);
+
+create table if not exists public.tbsb_team_event_catalog (
+  workspace_key text not null default 'shared',
+  team_number integer not null,
+  season_year integer not null default 2026,
+  payload jsonb not null default '[]'::jsonb,
+  generated_at timestamptz,
+  updated_at timestamptz not null default timezone('utc', now()),
+  primary key (workspace_key, team_number, season_year)
+);
+
+create table if not exists public.tbsb_refresh_status (
+  workspace_key text primary key default 'shared',
+  state text not null default 'idle' check (state in ('idle', 'loading', 'ready', 'error')),
+  last_run_at timestamptz,
+  last_success_at timestamptz,
+  last_error_at timestamptz,
+  last_error text,
+  detail jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.tbsb_bundle_status (
+  bundle_key text primary key,
+  workspace_key text not null default 'shared',
+  source text not null,
+  event_key text,
+  team_number integer,
+  scenario_id text,
+  state text not null default 'idle' check (state in ('idle', 'loading', 'ready', 'error')),
+  generated_at timestamptz,
+  error text,
+  meta jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.tbsb_parity_audit_log (
+  id uuid primary key default gen_random_uuid(),
+  route_key text not null,
+  workspace_key text not null default 'shared',
+  event_key text,
+  team_number integer,
+  scenario_id text,
+  status text not null check (status in ('match', 'diff', 'error', 'skipped')),
+  detail jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.tbsb_perf_samples (
+  id uuid primary key default gen_random_uuid(),
+  route_key text not null,
+  workspace_key text not null default 'shared',
+  event_key text,
+  team_number integer,
+  scenario_id text,
+  status_code integer not null,
+  duration_ms integer not null,
+  cache_state text,
+  meta jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.tbsb_compare_drafts (
   id text primary key,
   workspace_key text not null default 'shared',
@@ -129,6 +210,24 @@ create table if not exists public.tbsb_upstream_cache (
 create index if not exists tbsb_compare_drafts_workspace_scope_idx
   on public.tbsb_compare_drafts (workspace_key, scope);
 
+create index if not exists tbsb_team_event_catalog_workspace_updated_idx
+  on public.tbsb_team_event_catalog (workspace_key, updated_at desc);
+
+create index if not exists tbsb_bundle_status_workspace_updated_idx
+  on public.tbsb_bundle_status (workspace_key, updated_at desc);
+
+create index if not exists tbsb_parity_audit_log_route_created_idx
+  on public.tbsb_parity_audit_log (route_key, created_at desc);
+
+create index if not exists tbsb_parity_audit_log_workspace_created_idx
+  on public.tbsb_parity_audit_log (workspace_key, created_at desc);
+
+create index if not exists tbsb_perf_samples_route_created_idx
+  on public.tbsb_perf_samples (route_key, created_at desc);
+
+create index if not exists tbsb_perf_samples_workspace_created_idx
+  on public.tbsb_perf_samples (workspace_key, created_at desc);
+
 create index if not exists tbsb_compare_sets_workspace_idx
   on public.tbsb_compare_sets (workspace_key, updated_at desc);
 
@@ -161,6 +260,12 @@ create index if not exists tbsb_upstream_cache_source_path_idx
   on public.tbsb_upstream_cache (source, request_path, updated_at desc);
 
 alter table public.tbsb_workspace_settings enable row level security;
+alter table public.tbsb_active_target enable row level security;
+alter table public.tbsb_team_event_catalog enable row level security;
+alter table public.tbsb_refresh_status enable row level security;
+alter table public.tbsb_bundle_status enable row level security;
+alter table public.tbsb_parity_audit_log enable row level security;
+alter table public.tbsb_perf_samples enable row level security;
 alter table public.tbsb_compare_drafts enable row level security;
 alter table public.tbsb_compare_sets enable row level security;
 alter table public.tbsb_predict_scenarios enable row level security;
@@ -176,6 +281,42 @@ alter table public.tbsb_upstream_cache enable row level security;
 drop policy if exists "public read workspace settings" on public.tbsb_workspace_settings;
 create policy "public read workspace settings"
   on public.tbsb_workspace_settings
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "public read active target" on public.tbsb_active_target;
+create policy "public read active target"
+  on public.tbsb_active_target
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "shared workspace write active target" on public.tbsb_active_target;
+create policy "shared workspace write active target"
+  on public.tbsb_active_target
+  for all
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key))
+  with check (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "public read team event catalog" on public.tbsb_team_event_catalog;
+create policy "public read team event catalog"
+  on public.tbsb_team_event_catalog
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "public read refresh status" on public.tbsb_refresh_status;
+create policy "public read refresh status"
+  on public.tbsb_refresh_status
+  for select
+  to anon, authenticated
+  using (public.tbsb_is_allowed_workspace_key(workspace_key));
+
+drop policy if exists "public read bundle status" on public.tbsb_bundle_status;
+create policy "public read bundle status"
+  on public.tbsb_bundle_status
   for select
   to anon, authenticated
   using (public.tbsb_is_allowed_workspace_key(workspace_key));
@@ -325,10 +466,34 @@ insert into public.tbsb_workspace_settings (workspace_key, payload)
 values ('shared', '{}'::jsonb)
 on conflict (workspace_key) do nothing;
 
+insert into public.tbsb_active_target (workspace_key)
+values ('shared')
+on conflict (workspace_key) do nothing;
+
+insert into public.tbsb_refresh_status (workspace_key)
+values ('shared')
+on conflict (workspace_key) do nothing;
+
 do $$
 begin
   begin
     alter publication supabase_realtime add table public.tbsb_workspace_settings;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_active_target;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_team_event_catalog;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_refresh_status;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.tbsb_bundle_status;
   exception when duplicate_object then null;
   end;
   begin

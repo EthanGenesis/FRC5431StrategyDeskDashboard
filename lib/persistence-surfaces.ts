@@ -2,6 +2,12 @@ export const SHARED_WORKSPACE_KEY = 'shared' as const;
 
 export const PERSISTENCE_TABLES = {
   workspaceSettings: 'tbsb_workspace_settings',
+  activeTarget: 'tbsb_active_target',
+  teamEventCatalog: 'tbsb_team_event_catalog',
+  refreshStatus: 'tbsb_refresh_status',
+  bundleStatus: 'tbsb_bundle_status',
+  parityAuditLog: 'tbsb_parity_audit_log',
+  perfSamples: 'tbsb_perf_samples',
   compareDrafts: 'tbsb_compare_drafts',
   compareSets: 'tbsb_compare_sets',
   predictScenarios: 'tbsb_predict_scenarios',

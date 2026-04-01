@@ -18,6 +18,11 @@ function parseBoolean(value: unknown, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+function parsePositiveInteger(value: unknown, defaultValue: number): number {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
 const envSchema = z.object({
   TBA_AUTH_KEY: z.string().min(1, 'Missing TBA_AUTH_KEY in .env.local'),
   TBA_WEBHOOK_SECRET: z.string().trim().optional(),
@@ -56,17 +61,40 @@ const supabaseServiceEnvSchema = supabasePublicEnvSchema.extend({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'Missing SUPABASE_SERVICE_ROLE_KEY in .env.local'),
 });
 
+const hotDataPlaneEnvSchema = z.object({
+  HOT_DATA_PLANE_URL: z.string().url('Missing or invalid HOT_DATA_PLANE_URL in .env.local'),
+  HOT_DATA_PLANE_BEARER_TOKEN: z.string().trim().optional(),
+  HOT_DATA_PLANE_MODE: z.enum(['off', 'shadow', 'proxy']).default('off'),
+  HOT_DATA_PLANE_PROXY_ROUTES: z.string().trim().optional(),
+});
+
+const hotCacheEnvSchema = z.object({
+  UPSTASH_REDIS_REST_URL: z.string().url('Missing or invalid UPSTASH_REDIS_REST_URL in .env.local'),
+  UPSTASH_REDIS_REST_TOKEN: z.string().min(1, 'Missing UPSTASH_REDIS_REST_TOKEN in .env.local'),
+  HOT_CACHE_FRESH_SECONDS: z.number().int().positive().default(15),
+  HOT_CACHE_STALE_SECONDS: z.number().int().positive().default(60),
+});
+
 export type AppEnv = z.infer<typeof envSchema>;
 export type FirstApiEnv = z.infer<typeof firstApiEnvSchema>;
 export type NexusEnv = z.infer<typeof nexusEnvSchema>;
 export type SupabasePublicEnv = z.infer<typeof supabasePublicEnvSchema>;
 export type SupabaseServiceEnv = z.infer<typeof supabaseServiceEnvSchema>;
+export type HotDataPlaneEnv = Omit<
+  z.infer<typeof hotDataPlaneEnvSchema>,
+  'HOT_DATA_PLANE_PROXY_ROUTES'
+> & {
+  HOT_DATA_PLANE_PROXY_ROUTES: string[];
+};
+export type HotCacheEnv = z.infer<typeof hotCacheEnvSchema>;
 
 let parsedEnv: AppEnv | null = null;
 let parsedFirstApiEnv: FirstApiEnv | null = null;
 let parsedNexusEnv: NexusEnv | null = null;
 let parsedSupabasePublicEnv: SupabasePublicEnv | null = null;
 let parsedSupabaseServiceEnv: SupabaseServiceEnv | null = null;
+let parsedHotDataPlaneEnv: HotDataPlaneEnv | null = null;
+let parsedHotCacheEnv: HotCacheEnv | null = null;
 
 function getSupabasePublishableKey(): string | undefined {
   const candidates = [
@@ -180,4 +208,52 @@ export function getSupabaseServiceEnv(): SupabaseServiceEnv {
   });
 
   return parsedSupabaseServiceEnv;
+}
+
+export function hasHotDataPlaneEnv(): boolean {
+  return Boolean(process.env.HOT_DATA_PLANE_URL?.trim());
+}
+
+export function getHotDataPlaneEnv(): HotDataPlaneEnv {
+  if (parsedHotDataPlaneEnv) {
+    return parsedHotDataPlaneEnv;
+  }
+
+  const parsed = hotDataPlaneEnvSchema.parse({
+    HOT_DATA_PLANE_URL: process.env.HOT_DATA_PLANE_URL?.trim(),
+    HOT_DATA_PLANE_BEARER_TOKEN: process.env.HOT_DATA_PLANE_BEARER_TOKEN?.trim() ?? undefined,
+    HOT_DATA_PLANE_MODE: process.env.HOT_DATA_PLANE_MODE?.trim().toLowerCase() ?? 'off',
+    HOT_DATA_PLANE_PROXY_ROUTES: process.env.HOT_DATA_PLANE_PROXY_ROUTES?.trim() ?? undefined,
+  });
+
+  parsedHotDataPlaneEnv = {
+    ...parsed,
+    HOT_DATA_PLANE_PROXY_ROUTES: String(parsed.HOT_DATA_PLANE_PROXY_ROUTES ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  };
+
+  return parsedHotDataPlaneEnv;
+}
+
+export function hasHotCacheEnv(): boolean {
+  return Boolean(
+    process.env.UPSTASH_REDIS_REST_URL?.trim() && process.env.UPSTASH_REDIS_REST_TOKEN?.trim(),
+  );
+}
+
+export function getHotCacheEnv(): HotCacheEnv {
+  if (parsedHotCacheEnv) {
+    return parsedHotCacheEnv;
+  }
+
+  parsedHotCacheEnv = hotCacheEnvSchema.parse({
+    UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL?.trim(),
+    UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN?.trim(),
+    HOT_CACHE_FRESH_SECONDS: parsePositiveInteger(process.env.HOT_CACHE_FRESH_SECONDS, 15),
+    HOT_CACHE_STALE_SECONDS: parsePositiveInteger(process.env.HOT_CACHE_STALE_SECONDS, 60),
+  });
+
+  return parsedHotCacheEnv;
 }

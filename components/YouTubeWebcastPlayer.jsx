@@ -182,7 +182,11 @@ export default function YouTubeWebcastPlayer({
                 }
               }
 
-              if (autoplayOnMount && event.target?.playVideo) {
+              if (
+                autoplayOnMount &&
+                playerStateRef.current === 'unstarted' &&
+                event.target?.playVideo
+              ) {
                 event.target.playVideo();
               }
 

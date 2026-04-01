@@ -13,6 +13,10 @@ function buildTeam(teamNumber: number) {
   };
 }
 
+function readMockString(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback;
+}
+
 function buildRanking(teamNumber: number, rank: number) {
   return {
     team_key: `frc${teamNumber}`,
@@ -605,10 +609,125 @@ async function mockDashboardApis(page: Page) {
   const snapshot = buildSnapshotPayload();
   const dataSuper = buildDataSuperPayload();
   const districtSnapshot = buildDistrictSnapshotPayload();
+  const teamEvents = [
+    {
+      key: EVENT_KEY,
+      name: 'Test Regional',
+      shortName: 'Test Regional',
+      location: 'Houston, TX, USA',
+      startDate: '2026-03-27',
+      endDate: '2026-03-30',
+    },
+    {
+      key: '2026txwac',
+      name: 'Waco District Event',
+      shortName: 'Waco',
+      location: 'Waco, TX, USA',
+      startDate: '2026-03-19',
+      endDate: '2026-03-22',
+    },
+  ];
+  let sharedTarget = {
+    workspaceKey: 'shared',
+    seasonYear: 2026,
+    teamNumber: 5431,
+    eventKey: EVENT_KEY,
+    eventName: 'Test Regional',
+    eventShortName: 'Test Regional',
+    eventLocation: 'Houston, TX, USA',
+    startDate: '2026-03-27',
+    endDate: '2026-03-30',
+    lastSnapshotGeneratedAt: null,
+    lastEventContextGeneratedAt: null,
+    lastTeamCatalogGeneratedAt: null,
+    lastRefreshedAt: '2026-04-01T00:00:00.000Z',
+    refreshState: 'ready',
+    refreshError: null,
+    updatedAt: '2026-04-01T00:00:00.000Z',
+  };
+  let sharedRefreshStatus = {
+    workspaceKey: 'shared',
+    state: 'ready',
+    lastRunAt: '2026-04-01T00:00:00.000Z',
+    lastSuccessAt: '2026-04-01T00:00:00.000Z',
+    lastErrorAt: null,
+    lastError: null,
+    detail: null,
+    updatedAt: '2026-04-01T00:00:00.000Z',
+  };
 
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+
+    if (url.pathname === '/api/active-target' && request.method() === 'GET') {
+      await route.fulfill({
+        json: {
+          generatedAtMs: snapshot.generatedAtMs,
+          target: sharedTarget,
+          refreshStatus: sharedRefreshStatus,
+        },
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/active-target' && request.method() === 'POST') {
+      const rawBody: unknown = JSON.parse(request.postData() ?? '{}');
+      const body =
+        rawBody && typeof rawBody === 'object' ? (rawBody as Record<string, unknown>) : {};
+      sharedTarget = {
+        ...sharedTarget,
+        teamNumber: Number(body.teamNumber ?? sharedTarget.teamNumber),
+        eventKey: readMockString(body.eventKey, sharedTarget.eventKey),
+        eventName: readMockString(body.eventName, sharedTarget.eventName),
+        eventShortName: readMockString(body.eventShortName, sharedTarget.eventShortName),
+        eventLocation: readMockString(body.eventLocation, sharedTarget.eventLocation),
+        startDate: typeof body.startDate === 'string' ? body.startDate : sharedTarget.startDate,
+        endDate: typeof body.endDate === 'string' ? body.endDate : sharedTarget.endDate,
+      };
+      await route.fulfill({
+        json: {
+          generatedAtMs: snapshot.generatedAtMs,
+          target: sharedTarget,
+          refreshStatus: sharedRefreshStatus,
+        },
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/refresh-active-target') {
+      sharedRefreshStatus = {
+        ...sharedRefreshStatus,
+        state: 'ready',
+        lastRunAt: '2026-04-01T00:00:00.000Z',
+        lastSuccessAt: '2026-04-01T00:00:00.000Z',
+      };
+      await route.fulfill({
+        json: {
+          generatedAtMs: snapshot.generatedAtMs,
+          ok: true,
+          target: sharedTarget,
+          refreshStatus: sharedRefreshStatus,
+          components: {
+            snapshot: { ok: true, status: 200, error: null, generatedAtMs: snapshot.generatedAtMs },
+          },
+        },
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/team-events') {
+      await route.fulfill({
+        json: {
+          generatedAtMs: snapshot.generatedAtMs,
+          teamNumber: Number(url.searchParams.get('team') ?? '5431'),
+          year: 2026,
+          cached: true,
+          events: teamEvents,
+        },
+      });
+      return;
+    }
 
     if (url.pathname === '/api/snapshot') {
       await route.fulfill({ json: snapshot });
@@ -863,15 +982,22 @@ async function loadMockedDeskState(page: Page) {
 
   await setControlledInputValue(page.getByRole('spinbutton', { name: 'Team' }), '5431');
   await setControlledInputValue(page.getByRole('textbox', { name: 'Event' }), EVENT_KEY);
-  await Promise.all([
-    page.waitForResponse(
-      (response) =>
-        response.url().includes('/api/snapshot?') && response.request().method() === 'GET',
-    ),
-    page.getByRole('button', { name: 'Load' }).click(),
-  ]);
 
   const statusStrip = page.locator('.dashboard-status-strip');
+  const alreadyLoaded = await statusStrip
+    .getByText(`Event ${EVENT_KEY}`)
+    .isVisible()
+    .catch(() => false);
+  if (!alreadyLoaded) {
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/snapshot?') && response.request().method() === 'GET',
+      ),
+      page.getByRole('button', { name: 'Load' }).click(),
+    ]);
+  }
+
   await expect(statusStrip.getByText(`Event ${EVENT_KEY}`)).toBeVisible();
   await expect(statusStrip.getByText('Team 5431')).toBeVisible();
   await expect(statusStrip).not.toContainText('Waiting for first load');
@@ -953,6 +1079,51 @@ async function getMonteCarloComputeCount(page: Page) {
     );
   });
 }
+
+test('fresh browser boot auto-loads the shared active target without pressing Load', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/snapshot?') && response.request().method() === 'GET',
+  );
+
+  const statusStrip = page.locator('.dashboard-status-strip');
+  await expect(statusStrip.getByText(`Event ${EVENT_KEY}`)).toBeVisible();
+  await expect(statusStrip.getByText('Team 5431')).toBeVisible();
+  await expect(statusStrip).not.toContainText('Waiting for first load');
+});
+
+test('typing a team number shows 2026 team events and selecting one loads immediately', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('.dashboard-status-strip')).toContainText(`Event ${EVENT_KEY}`);
+  await expect(page.getByText('Test Regional (2026test)')).toBeVisible();
+
+  await setControlledInputValue(page.getByRole('spinbutton', { name: 'Team' }), '5431');
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/team-events?') && response.request().method() === 'GET',
+    ),
+    page.getByRole('textbox', { name: 'Event' }).focus(),
+  ]);
+  await expect(page.getByRole('button', { name: /Waco\b/i })).toBeVisible();
+
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/snapshot?team=5431&eventKey=2026txwac') &&
+        response.request().method() === 'GET',
+    ),
+    page.getByRole('button', { name: /Waco\b/i }).click(),
+  ]);
+
+  await expect(page.getByText('Waco (2026txwac)')).toBeVisible();
+  await expect(page.locator('.dashboard-status-strip')).toContainText('Event 2026txwac');
+});
 
 test('match to strategy workflow is preserved', async ({ page }) => {
   await loadMockedDeskState(page);

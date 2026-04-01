@@ -25,6 +25,7 @@ type DistrictPointsTabProps = {
   scope: 'current' | 'historical';
   loadedEventKey?: string;
   loadedTeam?: number | null;
+  externalUpdateKey?: number;
 };
 
 const DEFAULT_CALCULATOR: DistrictCalculatorInput = {
@@ -97,6 +98,7 @@ export default function DistrictPointsTab({
   scope,
   loadedEventKey,
   loadedTeam = null,
+  externalUpdateKey = 0,
 }: DistrictPointsTabProps): ReactElement {
   const { t, toneClass, toneFromStatus } = useDashboardPreferences();
   const [snapshot, setSnapshot] = useState<DistrictSnapshotResponse | null>(null);
@@ -169,13 +171,17 @@ export default function DistrictPointsTab({
 
   useEffect(() => {
     void loadSnapshot();
-  }, [loadSnapshot]);
+    const id = window.setInterval(() => {
+      void loadSnapshot();
+    }, 10000);
+    return () => window.clearInterval(id);
+  }, [externalUpdateKey, loadSnapshot]);
 
   useEffect(() => {
     if (!snapshot?.applicable) return;
     if (scope === 'current' && !snapshot.currentEvent) return;
     void runSimulation();
-  }, [runSimulation, scope, snapshot?.applicable, snapshot?.currentEvent]);
+  }, [externalUpdateKey, runSimulation, scope, snapshot?.applicable, snapshot?.currentEvent]);
 
   useEffect(() => {
     if (!snapshot) return;

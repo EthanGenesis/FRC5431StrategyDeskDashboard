@@ -243,7 +243,7 @@ export default function CompareTab({
       setIsLoading(true);
       setErrorText('');
       try {
-        const json = await fetchJsonOrThrow(
+        const nextSnapshot = await fetchJsonOrThrow(
           '/api/team-compare',
           {
             method: 'POST',
@@ -256,7 +256,7 @@ export default function CompareTab({
           },
           'Compare load failed',
         );
-        if (!cancelled) setSnapshot(json);
+        if (!cancelled) setSnapshot(nextSnapshot);
       } catch (error) {
         if (!cancelled) {
           setErrorText(error?.message ?? 'Unknown compare error');
@@ -267,10 +267,14 @@ export default function CompareTab({
       }
     }
     loadSnapshot();
+    const id = window.setInterval(() => {
+      void loadSnapshot();
+    }, 10000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [loadedEventKey, selectedTeamNumbers]);
+  }, [loadedEventKey, scope, selectedTeamNumbers]);
   useEffect(() => {
     if (scope === 'current' && String(draft.metricKey).startsWith('season_')) {
       updateDraft({

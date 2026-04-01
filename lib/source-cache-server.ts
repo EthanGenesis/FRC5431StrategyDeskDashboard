@@ -1,4 +1,6 @@
 import { cachedFetchJson } from './httpCache';
+import { buildSnapshotHotCacheKey, buildUpstreamHotCacheKey } from './hot-cache-keys';
+import { loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
@@ -6,6 +8,8 @@ import { getEventWorkspaceKey } from './workspace-key';
 
 type CacheSource = 'tba' | 'statbotics' | 'first' | 'nexus' | 'snapshot' | 'event_context';
 const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
+const SNAPSHOT_HOT_CACHE_FRESH_SECONDS = 90;
+const SNAPSHOT_HOT_CACHE_STALE_SECONDS = 240;
 
 type EventLiveSignalInput = {
   eventKey: string;
@@ -93,6 +97,10 @@ export async function loadPersistedUpstreamCache<T>(
   requestPath: string,
   maxAgeSeconds: number,
 ): Promise<T | null> {
+  const hotCacheKey = buildUpstreamHotCacheKey(source, requestPath);
+  const hotCacheValue = await loadHotCacheJson<T>(hotCacheKey);
+  if (hotCacheValue.value && !hotCacheValue.isStale) return hotCacheValue.value;
+
   const { client: admin } = getAdminClient();
   if (!admin) return null;
 
@@ -112,7 +120,15 @@ export async function loadPersistedUpstreamCache<T>(
     if (!Number.isFinite(updatedAtMs)) return null;
     if (Date.now() - updatedAtMs > maxAgeSeconds * 1000) return null;
 
-    return (response.data.payload ?? null) as T | null;
+    const payload = (response.data.payload ?? null) as T | null;
+    if (payload != null) {
+      void saveHotCacheJson(hotCacheKey, payload, {
+        freshForSeconds: maxAgeSeconds,
+        staleForSeconds: Math.max(maxAgeSeconds + 60, maxAgeSeconds * 3),
+      });
+    }
+
+    return payload;
   } catch (error) {
     logPersistenceEvent('warn', 'upstream_cache_read_failed', {
       source,
@@ -127,11 +143,18 @@ export async function savePersistedUpstreamCache(
   source: CacheSource,
   requestPath: string,
   payload: unknown,
+  maxAgeSeconds = 15,
 ): Promise<void> {
   const { client: admin } = getAdminClient();
+  const cacheKey = `${source}::${requestPath}`;
+  const hotCacheKey = buildUpstreamHotCacheKey(source, requestPath);
+  void saveHotCacheJson(hotCacheKey, payload, {
+    freshForSeconds: maxAgeSeconds,
+    staleForSeconds: Math.max(maxAgeSeconds + 60, maxAgeSeconds * 3),
+  });
+
   if (!admin) return;
 
-  const cacheKey = `${source}::${requestPath}`;
   try {
     await withTimeout(
       admin.from(PERSISTENCE_TABLES.upstreamCache).upsert(
@@ -166,7 +189,7 @@ export async function cachedSourceJson<T>(
   if (persisted != null) return persisted;
 
   const payload = await cachedFetchJson<T>(url, init, defaultMaxAgeSeconds);
-  void savePersistedUpstreamCache(source, requestPath, payload);
+  void savePersistedUpstreamCache(source, requestPath, payload, defaultMaxAgeSeconds);
   return payload;
 }
 
@@ -178,6 +201,12 @@ export async function saveSnapshotCacheRecord(input: {
   payload: unknown;
 }): Promise<void> {
   const { client: admin } = getAdminClient();
+  const hotCacheKey = buildSnapshotHotCacheKey(input.source, input.eventKey, input.teamNumber);
+  void saveHotCacheJson(hotCacheKey, input.payload, {
+    freshForSeconds: SNAPSHOT_HOT_CACHE_FRESH_SECONDS,
+    staleForSeconds: SNAPSHOT_HOT_CACHE_STALE_SECONDS,
+  });
+
   if (!admin) return;
 
   const generatedAtIso = toIsoString(input.generatedAt);
@@ -206,6 +235,57 @@ export async function saveSnapshotCacheRecord(input: {
       teamNumber: input.teamNumber,
       detail: error instanceof Error ? error.message : 'Unknown snapshot cache write error',
     });
+  }
+}
+
+export async function loadSnapshotCacheRecord<T>(
+  source: CacheSource,
+  eventKey: string | null,
+  teamNumber: number | null,
+  maxAgeSeconds: number,
+): Promise<T | null> {
+  const hotCacheKey = buildSnapshotHotCacheKey(source, eventKey, teamNumber);
+  const hotCacheValue = await loadHotCacheJson<T>(hotCacheKey);
+  if (hotCacheValue.value && !hotCacheValue.isStale) return hotCacheValue.value;
+
+  const { client: admin } = getAdminClient();
+  if (!admin) return null;
+
+  const cacheKey = [source, eventKey ?? 'none', teamNumber ?? 'none'].join('::');
+
+  try {
+    const response = await withTimeout(
+      admin
+        .from(PERSISTENCE_TABLES.snapshotCache)
+        .select('payload, generated_at, updated_at')
+        .eq('cache_key', cacheKey)
+        .maybeSingle(),
+      `load snapshot cache for ${cacheKey}`,
+    );
+    if (response.error || !response.data) return null;
+
+    const generatedAtMs = Date.parse(
+      String(response.data.generated_at ?? response.data.updated_at ?? ''),
+    );
+    if (!Number.isFinite(generatedAtMs)) return null;
+    if (Date.now() - generatedAtMs > maxAgeSeconds * 1000) return null;
+
+    const payload = (response.data.payload ?? null) as T | null;
+    if (payload != null) {
+      void saveHotCacheJson(hotCacheKey, payload, {
+        freshForSeconds: maxAgeSeconds,
+        staleForSeconds: Math.max(maxAgeSeconds + 60, maxAgeSeconds * 3),
+      });
+    }
+    return payload;
+  } catch (error) {
+    logPersistenceEvent('warn', 'snapshot_cache_read_failed', {
+      source,
+      eventKey,
+      teamNumber,
+      detail: error instanceof Error ? error.message : 'Unknown snapshot cache read error',
+    });
+    return null;
   }
 }
 

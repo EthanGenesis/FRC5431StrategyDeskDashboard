@@ -9,6 +9,30 @@
 
 ## Major Routes
 
+### `GET /api/bootstrap`
+
+Warm boot payload for the shared desk.
+
+Core payload areas:
+
+- shared active target
+- shared refresh status
+- warm current snapshot
+- warm team event catalog
+- bundle manifest summary keyed by bundle source
+
+Bootstrap and warm-bundle responses may also include cache metadata when available:
+
+- `generatedAtMs`
+- `bundleKey`
+- `bundleVersion`
+- `etag`
+- `cacheState`
+- `cacheLayer`
+- `refreshState`
+- `freshUntil`
+- `staleAt`
+
 ### `GET /api/snapshot`
 
 Primary current-event snapshot used by the dashboard shell.
@@ -133,10 +157,55 @@ Core payload areas:
 - diagnostics
 - raw payload references
 
+### Warm bundle routes
+
+Server-authoritative warm bundle routes now exist for the heavy desk tabs:
+
+- `POST /api/compare-bundle`
+- `POST /api/predict-bundle`
+- `POST /api/alliance-bundle`
+- `POST /api/playoff-bundle`
+- `POST /api/impact-bundle`
+- `POST /api/pick-list-bundle`
+
+Each route keeps the existing UI-facing payload body for its feature area and may additionally return:
+
+- `generatedAtMs`
+- `bundleKey`
+- `bundleVersion`
+- `etag`
+- `cacheState`
+- `cacheLayer`
+- `refreshState`
+- `freshUntil`
+- `staleAt`
+
+Compatibility rules:
+
+- the typed payload body remains the source of truth for the tab UI
+- cache metadata is additive and must not replace existing domain payload fields
+- if the hot plane is disabled or unavailable, local server handling remains the fallback
+
+### Internal hot-plane behavior
+
+Some routes can now operate in three modes controlled by environment:
+
+- `disabled`
+  - current route handler responds locally
+- `shadow`
+  - current route handler responds locally
+  - an internal hot-plane request runs in parallel for parity and perf logging
+- `proxy`
+  - eligible routes proxy to the hot plane first
+  - local route handling remains the fallback path on proxy failure
+
+This rollout model is intentionally additive so route contracts remain stable while performance infrastructure evolves.
+
 ## Compatibility Notes
 
 - Client code still expects some routes to provide raw nested payloads for deep tables and troubleshooting.
 - Do not "clean up" route outputs by deleting fields unless the UI has first been updated and parity has been revalidated.
+- Warm bundle metadata is additive and should be treated as transport/cache information, not as a replacement for existing feature payloads.
 - Nexus optional subresources are event-conditional:
   - `/pits`
   - `/inspection`

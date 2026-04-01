@@ -27,6 +27,7 @@ type TeamProfileTabProps = {
   onOpenStrategy?: (target: StrategyTarget) => void;
   onAddToCompare?: (teamNumber: number) => void;
   scope?: TeamProfileScope;
+  externalUpdateKey?: number;
 };
 
 function fmt(value: unknown, digits = 1): string {
@@ -109,6 +110,7 @@ export default function TeamProfileTab({
   onOpenStrategy,
   onAddToCompare,
   scope = 'current',
+  externalUpdateKey = 0,
 }: TeamProfileTabProps): ReactElement {
   const [searchInput, setSearchInput] = useState(() =>
     suggestedTeamNumber != null ? String(suggestedTeamNumber) : '',
@@ -173,7 +175,11 @@ export default function TeamProfileTab({
   useEffect(() => {
     if (activeTeamNumber == null) return;
     void loadTeamProfile(activeTeamNumber);
-  }, [activeTeamNumber, loadTeamProfile]);
+    const id = window.setInterval(() => {
+      void loadTeamProfile(activeTeamNumber);
+    }, 10000);
+    return () => window.clearInterval(id);
+  }, [activeTeamNumber, externalUpdateKey, loadTeamProfile]);
   const seasonSummary = useMemo<LooseRecord | null>(
     () => (profile?.seasonSummary as LooseRecord | null) ?? null,
     [profile],
