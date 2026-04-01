@@ -960,6 +960,7 @@ export default function HomePage() {
     suppressed: false,
     errorText: '',
   });
+  const [desktopWebcastPiPEnabled, setDesktopWebcastPiPEnabled] = useState(false);
   const [inlineWebcastInView, setInlineWebcastInView] = useState(true);
   const [persistedWebcastSuppressed, setPersistedWebcastSuppressed] = useState(false);
   const officialCounts = sourceValidation?.officialCounts ?? null;
@@ -988,6 +989,7 @@ export default function HomePage() {
     webcastPlayerState.suppressed || Boolean(persistedWebcastSuppressed);
   const webcastPlaybackContinuing = webcastStateIsContinuing(webcastPlayerState.playbackState);
   const showScrollPictureInPicture = Boolean(
+    desktopWebcastPiPEnabled &&
     isNowTab &&
     preferredYouTubeVideoId &&
     !webcastPlaybackSuppressed &&
@@ -995,13 +997,16 @@ export default function HomePage() {
     (webcastPlaybackContinuing || webcastPlayerState.floatingVisible),
   );
   const showFloatingWebcast = Boolean(
+    desktopWebcastPiPEnabled &&
     preferredYouTubeVideoId &&
     !webcastPlaybackSuppressed &&
     (showScrollPictureInPicture ||
       webcastPlayerState.floatingVisible ||
       (!isNowTab && webcastPlaybackContinuing)),
   );
-  const showInlineWebcast = Boolean(isNowTab && preferredYouTubeVideoId && !showFloatingWebcast);
+  const showInlineWebcast = Boolean(
+    isNowTab && preferredYouTubeVideoId && (!desktopWebcastPiPEnabled || !showFloatingWebcast),
+  );
   const pitAddressRows = useMemo(() => {
     const rows = Object.entries(nexusSnapshot?.pitAddressByTeam ?? {}).map(([teamNumber, pit]) => ({
       teamNumber: Number(teamNumber),
@@ -1277,6 +1282,29 @@ export default function HomePage() {
     }));
   }, [loadedEventKey, preferredYouTubeVideoId]);
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const syncDesktopWebcastPiPEnabled = () => {
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      setDesktopWebcastPiPEnabled(viewportWidth >= 1024);
+    };
+
+    syncDesktopWebcastPiPEnabled();
+    window.addEventListener('resize', syncDesktopWebcastPiPEnabled);
+    window.addEventListener('orientationchange', syncDesktopWebcastPiPEnabled);
+    return () => {
+      window.removeEventListener('resize', syncDesktopWebcastPiPEnabled);
+      window.removeEventListener('orientationchange', syncDesktopWebcastPiPEnabled);
+    };
+  }, []);
+  useEffect(() => {
+    if (!desktopWebcastPiPEnabled) {
+      setWebcastPlayerState((prev) =>
+        prev.floatingVisible ? { ...prev, floatingVisible: false } : prev,
+      );
+      return;
+    }
+
     if (!preferredYouTubeVideoId) return;
 
     if (isNowTab) {
@@ -1303,6 +1331,7 @@ export default function HomePage() {
       };
     });
   }, [
+    desktopWebcastPiPEnabled,
     inlineWebcastInView,
     isNowTab,
     preferredYouTubeVideoId,

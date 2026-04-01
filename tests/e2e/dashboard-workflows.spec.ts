@@ -1158,6 +1158,36 @@ test('closing the floating mini-player keeps it dismissed until playback restart
   await expect(page.getByLabel('Floating Webcast Player')).toBeVisible();
 });
 
+test.describe('mobile webcast behavior', () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  });
+
+  test('webcast PiP stays disabled on phone-sized screens', async ({ page }) => {
+    await loadMockedDeskState(page);
+
+    await scrollInlineWebcastIntoView(page);
+    await startMockWebcastPlayback(page);
+    await waitForMockWebcastState(page, 1);
+    await page.waitForTimeout(200);
+
+    await page.evaluate(() => {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    });
+    await page.waitForTimeout(200);
+    await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'EVENT', exact: true }).click();
+    await page.waitForTimeout(200);
+    await expect(page.getByLabel('Floating Webcast Player')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Exit PiP' })).toHaveCount(0);
+  });
+});
+
 test('predict surfaces public-data alliance heuristics', async ({ page }) => {
   await loadMockedDeskState(page);
 
