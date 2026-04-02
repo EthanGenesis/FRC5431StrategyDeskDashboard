@@ -1,11 +1,12 @@
 import type { NextResponse } from 'next/server';
 import type { EventContextSnapshot } from '../../../lib/strategy-types';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
-import { saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
+import { loadSnapshotCacheRecord, saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { loadEventContext, parseRequiredEventKey } from '../../../lib/server-data';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const WARM_EVENT_CONTEXT_MAX_AGE_SECONDS = 90;
 
 export async function GET(
   req: Request,
@@ -15,6 +16,20 @@ export async function GET(
 
   try {
     const eventKey = parseRequiredEventKey(searchParams.get('eventKey') ?? '');
+    const cachedPayload = await loadSnapshotCacheRecord<EventContextSnapshot>(
+      'event_context',
+      eventKey,
+      null,
+      WARM_EVENT_CONTEXT_MAX_AGE_SECONDS,
+    );
+    if (cachedPayload) {
+      return routeJson(routeContext, cachedPayload, undefined, {
+        eventKey,
+        cacheState: 'warm',
+        source: 'warm_cache',
+      });
+    }
+
     const eventContext = await loadEventContext(eventKey, null);
 
     const payload: EventContextSnapshot = {

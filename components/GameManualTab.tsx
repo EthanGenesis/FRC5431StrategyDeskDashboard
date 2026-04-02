@@ -84,7 +84,7 @@ export default function GameManualTab(): ReactElement {
     try {
       const json = await fetchJsonOrThrow<GameManualSnapshot>(
         '/api/game-manual',
-        { cache: 'no-store' },
+        { cache: 'default' },
         'Game manual failed to load',
       );
       setSnapshot(json);

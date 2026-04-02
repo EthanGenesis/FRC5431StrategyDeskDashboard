@@ -15,7 +15,7 @@ import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 import { getEventWorkspaceKey } from './workspace-key';
 
-type CacheSource = 'tba' | 'statbotics' | 'first' | 'nexus' | 'snapshot' | 'event_context';
+type CacheSource = string;
 const SUPABASE_OPERATION_TIMEOUT_MS = 900;
 const SNAPSHOT_HOT_CACHE_FRESH_SECONDS = 90;
 const SNAPSHOT_HOT_CACHE_STALE_SECONDS = 240;

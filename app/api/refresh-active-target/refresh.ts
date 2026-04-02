@@ -1,14 +1,16 @@
 import { POST as postAllianceBundleRoute } from '../alliance-bundle/route';
 import { POST as postCompareBundleRoute } from '../compare-bundle/route';
-import { GET as getDataSuperRoute } from '../data-super/route';
+import { GET as getDataSuperRoute, POST as postDataSuperRoute } from '../data-super/route';
 import { GET as getDistrictRoute } from '../district-points/route';
 import { GET as getEventContextRoute } from '../event-context/route';
+import { GET as getGameManualRoute } from '../game-manual/route';
 import { POST as postImpactBundleRoute } from '../impact-bundle/route';
 import { POST as postPickListBundleRoute } from '../pick-list-bundle/route';
 import { POST as postPlayoffBundleRoute } from '../playoff-bundle/route';
 import { GET as getPreEventScoutRoute } from '../pre-event-scout/route';
 import { POST as postPredictBundleRoute } from '../predict-bundle/route';
 import { GET as getSnapshotRoute } from '../snapshot/route';
+import { POST as postTeamCompareRoute } from '../team-compare/route';
 import { GET as getTeamProfileRoute } from '../team-profile/route';
 import { readJsonResponse } from '../../../lib/httpCache';
 import { saveWarmBundlePayload } from '../../../lib/bundle-cache-server';
@@ -21,6 +23,7 @@ import {
   saveSharedRefreshStatus,
 } from '../../../lib/shared-target-server';
 import {
+  loadCompareDraftSharedServer,
   loadCompareSetsSharedServer,
   loadNamedArtifactsSharedServer,
 } from '../../../lib/shared-workspace-server';
@@ -222,8 +225,20 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
     forceRefresh: true,
   });
   const workspaceKey = getEventWorkspaceKey(target.eventKey) ?? target.workspaceKey;
+  const [currentCompareDraft, historicalCompareDraft] = await Promise.all([
+    loadCompareDraftSharedServer('current', workspaceKey),
+    loadCompareDraftSharedServer('historical', workspaceKey),
+  ]);
 
   const baseUrl = 'http://localhost';
+  const currentCompareTeams = Array.from(
+    new Set([...(currentCompareDraft.teamNumbers ?? []), target.teamNumber ?? 0].filter(Boolean)),
+  );
+  const historicalCompareTeams = Array.from(
+    new Set(
+      [...(historicalCompareDraft.teamNumbers ?? []), target.teamNumber ?? 0].filter(Boolean),
+    ),
+  );
   const componentEntries = await Promise.all([
     invokeRoute(
       'snapshot',
@@ -256,6 +271,40 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
         `${baseUrl}/api/data-super?eventKey=${encodeURIComponent(target.eventKey)}&loadedTeam=${encodeURIComponent(String(target.teamNumber))}`,
       ),
     ).then((result) => ['data_super', result] as const),
+    ...(currentCompareTeams.length
+      ? [
+          invokeRoute(
+            'data_super_current',
+            postDataSuperRoute,
+            new Request(`${baseUrl}/api/data-super`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                eventKey: target.eventKey,
+                loadedTeam: target.teamNumber,
+                compareTeams: currentCompareTeams,
+              }),
+            }),
+          ).then((result) => ['data_super_current', result] as const),
+        ]
+      : []),
+    ...(historicalCompareTeams.length
+      ? [
+          invokeRoute(
+            'data_super_historical',
+            postDataSuperRoute,
+            new Request(`${baseUrl}/api/data-super`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                eventKey: target.eventKey,
+                loadedTeam: target.teamNumber,
+                compareTeams: historicalCompareTeams,
+              }),
+            }),
+          ).then((result) => ['data_super_historical', result] as const),
+        ]
+      : []),
     invokeRoute(
       'district_points',
       getDistrictRoute,
@@ -263,6 +312,9 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
         `${baseUrl}/api/district-points?eventKey=${encodeURIComponent(target.eventKey)}&team=${encodeURIComponent(String(target.teamNumber))}`,
       ),
     ).then((result) => ['district_points', result] as const),
+    invokeRoute('game_manual', getGameManualRoute, new Request(`${baseUrl}/api/game-manual`)).then(
+      (result) => ['game_manual', result] as const,
+    ),
     invokeRoute(
       'compare_bundle',
       postCompareBundleRoute,
@@ -275,6 +327,51 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
         }),
       }),
     ).then((result) => ['compare_bundle', result] as const),
+    invokeRoute(
+      'compare_bundle_historical',
+      postCompareBundleRoute,
+      new Request(`${baseUrl}/api/compare-bundle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventKey: target.eventKey,
+          teamNumber: target.teamNumber,
+          scope: 'historical',
+        }),
+      }),
+    ).then((result) => ['compare_bundle_historical', result] as const),
+    ...(currentCompareTeams.length
+      ? [
+          invokeRoute(
+            'team_compare_current',
+            postTeamCompareRoute,
+            new Request(`${baseUrl}/api/team-compare`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                teams: currentCompareTeams,
+                eventKey: target.eventKey,
+              }),
+            }),
+          ).then((result) => ['team_compare_current', result] as const),
+        ]
+      : []),
+    ...(historicalCompareTeams.length
+      ? [
+          invokeRoute(
+            'team_compare_historical',
+            postTeamCompareRoute,
+            new Request(`${baseUrl}/api/team-compare`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                teams: historicalCompareTeams,
+                eventKey: target.eventKey,
+              }),
+            }),
+          ).then((result) => ['team_compare_historical', result] as const),
+        ]
+      : []),
     invokeRoute(
       'predict_bundle',
       postPredictBundleRoute,

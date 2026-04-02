@@ -31,9 +31,11 @@ import {
   TEAM_PROFILE_YEAR,
 } from '../../../lib/teamProfileData';
 import { tbaGet } from '../../../lib/tba';
+import { loadSnapshotCacheRecord, saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const WARM_TEAM_PROFILE_MAX_AGE_SECONDS = 90;
 
 type SbMatchBreakdown = {
   auto_points?: unknown;
@@ -130,6 +132,22 @@ export async function GET(
     const summaryOnly = searchParams.get('summaryOnly') === '1';
     const loadedEventKeyParam = searchParams.get('eventKey')?.trim() ?? '';
     const loadedEventKey = loadedEventKeyParam ? parseRequiredEventKey(loadedEventKeyParam) : '';
+    const cacheSource = summaryOnly ? 'team_profile_summary' : 'team_profile';
+    const cachedPayload = await loadSnapshotCacheRecord<TeamProfileRouteResponse>(
+      cacheSource,
+      loadedEventKey || null,
+      team,
+      WARM_TEAM_PROFILE_MAX_AGE_SECONDS,
+    );
+    if (cachedPayload) {
+      return routeJson(routeContext, cachedPayload, undefined, {
+        team,
+        loadedEventKey: loadedEventKey || null,
+        summaryOnly,
+        cacheState: 'warm',
+        source: 'warm_cache',
+      });
+    }
     const teamKey = tbaTeamKey(team);
     const { TBA_AUTH_KEY } = getAppEnv();
 
@@ -158,41 +176,47 @@ export async function GET(
 
     if (summaryOnly) {
       const seasonRollups = buildSeasonRollups(playedEvents, upcomingEvents, [], seasonSummary);
-      return routeJson(
-        routeContext,
-        {
-          generatedAtMs: Date.now(),
-          team,
-          summary: rawSummary,
-          seasonSummary,
-          seasonRollups,
-          playedEvents,
-          upcomingEvents,
-          teamEventsByKey,
+      const payload = {
+        generatedAtMs: Date.now(),
+        team,
+        summary: rawSummary,
+        seasonSummary,
+        seasonRollups,
+        playedEvents,
+        upcomingEvents,
+        teamEventsByKey,
+        matches: [],
+        loadedEventKey: loadedEventKey || null,
+        seasonEvents: seasonRows,
+        currentEvent: null,
+        historical2026: {
+          seasonEvents: seasonRows.filter(
+            (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
+          ),
+          playedEvents: playedEvents.filter(
+            (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
+          ),
+          upcomingEvents: upcomingEvents.filter(
+            (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
+          ),
           matches: [],
-          loadedEventKey: loadedEventKey || null,
-          seasonEvents: seasonRows,
-          currentEvent: null,
-          historical2026: {
-            seasonEvents: seasonRows.filter(
-              (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
-            ),
-            playedEvents: playedEvents.filter(
-              (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
-            ),
-            upcomingEvents: upcomingEvents.filter(
-              (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
-            ),
-            matches: [],
-          },
         },
-        undefined,
-        {
-          team,
-          loadedEventKey: loadedEventKey || null,
-          summaryOnly: true,
-        },
-      );
+      } satisfies TeamProfileRouteResponse;
+
+      void saveSnapshotCacheRecord({
+        source: cacheSource,
+        eventKey: loadedEventKey || null,
+        teamNumber: team,
+        generatedAt: payload.generatedAtMs,
+        payload,
+      });
+
+      return routeJson(routeContext, payload, undefined, {
+        team,
+        loadedEventKey: loadedEventKey || null,
+        summaryOnly: true,
+        cacheState: 'cold',
+      });
     }
 
     const teamMatches2026 = rawTeamMatches
@@ -390,38 +414,44 @@ export async function GET(
       };
     }
 
-    return routeJson(
-      routeContext,
-      {
-        generatedAtMs: Date.now(),
-        team,
-        loadedEventKey: loadedEventKey || null,
-        summary: rawSummary,
-        seasonSummary,
-        seasonRollups,
-        playedEvents,
-        upcomingEvents,
-        teamEventsByKey,
-        matches,
-        seasonEvents: seasonRows,
-        currentEvent,
-        historical2026: {
-          seasonEvents: seasonRows.filter(
-            (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
-          ),
-          playedEvents: historicalPlayedEvents,
-          upcomingEvents: historicalUpcomingEvents,
-          matches: historicalMatches,
-        },
+    const payload = {
+      generatedAtMs: Date.now(),
+      team,
+      loadedEventKey: loadedEventKey || null,
+      summary: rawSummary,
+      seasonSummary,
+      seasonRollups,
+      playedEvents,
+      upcomingEvents,
+      teamEventsByKey,
+      matches,
+      seasonEvents: seasonRows,
+      currentEvent,
+      historical2026: {
+        seasonEvents: seasonRows.filter(
+          (row) => !loadedEventKey || String(row?.event ?? '') !== loadedEventKey,
+        ),
+        playedEvents: historicalPlayedEvents,
+        upcomingEvents: historicalUpcomingEvents,
+        matches: historicalMatches,
       },
-      undefined,
-      {
-        team,
-        loadedEventKey: loadedEventKey || null,
-        summaryOnly: false,
-        matchCount: matches.length,
-      },
-    );
+    } satisfies TeamProfileRouteResponse;
+
+    void saveSnapshotCacheRecord({
+      source: cacheSource,
+      eventKey: loadedEventKey || null,
+      teamNumber: team,
+      generatedAt: payload.generatedAtMs,
+      payload,
+    });
+
+    return routeJson(routeContext, payload, undefined, {
+      team,
+      loadedEventKey: loadedEventKey || null,
+      summaryOnly: false,
+      matchCount: matches.length,
+      cacheState: 'cold',
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown team-profile error';
     const status =

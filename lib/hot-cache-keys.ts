@@ -68,3 +68,18 @@ export function buildUpstreamHotCacheKey(source: string, requestPath: string): s
 export function buildEventLiveSignalsHotCacheKey(eventKey: string | null | undefined): string {
   return ['event_live_signals', readString(eventKey) || 'none'].join('::');
 }
+
+export function buildDistrictSnapshotHotCacheKey(
+  eventKey: string | null | undefined,
+  teamNumber: number | null | undefined,
+): string {
+  return [
+    'district_snapshot',
+    readString(eventKey) || 'none',
+    readPositiveInteger(teamNumber) ?? 'none',
+  ].join('::');
+}
+
+export function buildGameManualHotCacheKey(version: string | null | undefined = '2026'): string {
+  return ['game_manual', readString(version) || 'current'].join('::');
+}

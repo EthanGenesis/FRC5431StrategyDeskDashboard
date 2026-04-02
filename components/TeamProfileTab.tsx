@@ -135,7 +135,7 @@ export default function TeamProfileTab({
         const json = await fetchJsonOrThrow<TeamProfileRouteResponse>(
           `/api/team-profile?${query.toString()}`,
           {
-            cache: 'no-store',
+            cache: 'default',
           },
           'Team profile failed',
         );

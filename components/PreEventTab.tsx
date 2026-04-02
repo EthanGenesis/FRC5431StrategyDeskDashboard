@@ -196,7 +196,7 @@ export default function PreEventTab({
       try {
         const json = await fetchJsonOrThrow<PreEventScoutResponse>(
           `/api/pre-event-scout?eventKey=${encodeURIComponent(eventKey)}`,
-          { cache: 'no-store' },
+          { cache: 'default' },
           'Pre-event scout load failed',
         );
         if (!cancelled) setScoutData(json);

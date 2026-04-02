@@ -22,13 +22,16 @@ import {
   splitSeasonEvents,
   TEAM_PROFILE_YEAR,
 } from '../../../lib/teamProfileData';
+import { hashJsonValue } from '../../../lib/json-stable';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { loadSnapshotCacheRecord, saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { sbGet } from '../../../lib/statbotics';
 import { tbaTeamKey } from '../../../lib/logic';
 import { loadEventContext, parseCompareTeams, safeResolve } from '../../../lib/server-data';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const WARM_DATA_SUPER_MAX_AGE_SECONDS = 90;
 
 function extractName(value: unknown): string | null {
   if (
@@ -168,6 +171,12 @@ type DataSuperRequest = {
   compareTeams?: unknown;
 };
 
+function buildDataSuperCacheSource(compareTeams: number[]): string {
+  return compareTeams.length
+    ? `data_super_${hashJsonValue(compareTeams).slice(0, 12)}`
+    : 'data_super';
+}
+
 async function buildResponse(
   routeContext: ReturnType<typeof beginRouteRequest>,
   body: DataSuperRequest,
@@ -177,6 +186,22 @@ async function buildResponse(
   const loadedTeam =
     Number.isFinite(rawLoadedTeam) && rawLoadedTeam > 0 ? Math.floor(rawLoadedTeam) : null;
   const compareTeams = parseCompareTeams(body.compareTeams ?? []);
+  const cacheSource = buildDataSuperCacheSource(compareTeams);
+  const cachedPayload = await loadSnapshotCacheRecord<DataSuperSnapshot>(
+    cacheSource,
+    loadedEventKey || null,
+    loadedTeam,
+    WARM_DATA_SUPER_MAX_AGE_SECONDS,
+  );
+  if (cachedPayload) {
+    return routeJson(routeContext, cachedPayload, undefined, {
+      loadedEventKey: loadedEventKey || null,
+      loadedTeam,
+      compareTeamCount: compareTeams.length,
+      cacheState: 'warm',
+      source: 'warm_cache',
+    });
+  }
 
   const eventContext = loadedEventKey ? await loadEventContext(loadedEventKey) : null;
   const eventRows = eventContext ? buildEventTeamRowsFromContext(eventContext) : [];
@@ -195,48 +220,55 @@ async function buildResponse(
       }
     : null;
 
-  return routeJson(
-    routeContext,
-    {
-      generatedAtMs: Date.now(),
-      loadedEventKey: loadedEventKey || null,
-      loadedTeam,
-      currentEvent: eventContext
-        ? {
-            event: eventContext.tba.event ?? null,
-            eventRows,
-            fieldAverages,
-            matches: eventContext.tba.matches ?? [],
-            insights: eventContext.tba.insights ?? null,
-            rankings: eventContext.tba.rankings ?? null,
-            alliances: eventContext.tba.alliances ?? null,
-            status: eventContext.tba.status ?? null,
-            awards: eventContext.tba.awards ?? null,
-          }
-        : null,
+  const generatedAtMs = Date.now();
+  const payload = {
+    generatedAtMs,
+    loadedEventKey: loadedEventKey || null,
+    loadedTeam,
+    currentEvent: eventContext
+      ? {
+          event: eventContext.tba.event ?? null,
+          eventRows,
+          fieldAverages,
+          matches: eventContext.tba.matches ?? [],
+          insights: eventContext.tba.insights ?? null,
+          rankings: eventContext.tba.rankings ?? null,
+          alliances: eventContext.tba.alliances ?? null,
+          status: eventContext.tba.status ?? null,
+          awards: eventContext.tba.awards ?? null,
+        }
+      : null,
+    historicalTeam,
+    compare,
+    diagnostics: {
+      eventTeamCount: eventRows.length,
+      tbaMatchCount: eventContext?.tba.matches?.length ?? 0,
+      sbMatchCount: eventContext?.sb.matches?.length ?? 0,
+      sbTeamEventCount: eventContext?.sb.teamEvents?.length ?? 0,
+      compareTeamCount: compare?.teams?.length ?? 0,
+      generatedAtMs,
+    },
+    rawPayloads: {
+      tba: eventContext?.tba ?? null,
+      sb: eventContext?.sb ?? null,
       historicalTeam,
-      compare,
-      diagnostics: {
-        eventTeamCount: eventRows.length,
-        tbaMatchCount: eventContext?.tba.matches?.length ?? 0,
-        sbMatchCount: eventContext?.sb.matches?.length ?? 0,
-        sbTeamEventCount: eventContext?.sb.teamEvents?.length ?? 0,
-        compareTeamCount: compare?.teams?.length ?? 0,
-        generatedAtMs: Date.now(),
-      },
-      rawPayloads: {
-        tba: eventContext?.tba ?? null,
-        sb: eventContext?.sb ?? null,
-        historicalTeam,
-      },
     },
-    undefined,
-    {
-      loadedEventKey: loadedEventKey || null,
-      loadedTeam,
-      compareTeamCount: compare?.teams.length ?? 0,
-    },
-  );
+  } satisfies DataSuperSnapshot;
+
+  void saveSnapshotCacheRecord({
+    source: cacheSource,
+    eventKey: loadedEventKey || null,
+    teamNumber: loadedTeam,
+    generatedAt: payload.generatedAtMs,
+    payload,
+  });
+
+  return routeJson(routeContext, payload, undefined, {
+    loadedEventKey: loadedEventKey || null,
+    loadedTeam,
+    compareTeamCount: compare?.teams.length ?? 0,
+    cacheState: 'cold',
+  });
 }
 
 export async function POST(

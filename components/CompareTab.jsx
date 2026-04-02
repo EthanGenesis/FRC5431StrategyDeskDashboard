@@ -252,7 +252,7 @@ export default function CompareTab({
               teams: selectedTeamNumbers,
               eventKey: loadedEventKey || '',
             }),
-            cache: 'no-store',
+            cache: 'default',
           },
           'Compare load failed',
         );

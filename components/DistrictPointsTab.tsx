@@ -126,7 +126,7 @@ export default function DistrictPointsTab({
       if (loadedTeam != null) query.set('team', String(loadedTeam));
       const json = await fetchJsonOrThrow<DistrictSnapshotResponse>(
         `/api/district-points?${query.toString()}`,
-        { cache: 'no-store' },
+        { cache: 'default' },
         'District snapshot failed',
       );
       setSnapshot(json);

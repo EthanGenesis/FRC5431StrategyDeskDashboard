@@ -115,7 +115,7 @@ export default function TeamContextAnalyticsBlock({
               teams: requestTeams,
               eventKey: loadedEventKey ?? '',
             }),
-            cache: 'no-store',
+            cache: 'default',
           },
           'Context analytics load failed',
         );

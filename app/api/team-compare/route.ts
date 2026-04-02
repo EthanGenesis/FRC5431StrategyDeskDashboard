@@ -15,13 +15,16 @@ import {
   splitSeasonEvents,
   TEAM_PROFILE_YEAR,
 } from '../../../lib/teamProfileData';
+import { hashJsonValue } from '../../../lib/json-stable';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { loadSnapshotCacheRecord, saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { sbGet } from '../../../lib/statbotics';
 import { loadEventContext, parseCompareTeams } from '../../../lib/server-data';
 import { tbaTeamKey } from '../../../lib/logic';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const WARM_TEAM_COMPARE_MAX_AGE_SECONDS = 90;
 
 function extractName(value: unknown): string | null {
   if (
@@ -40,6 +43,10 @@ function eventKeyValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function buildTeamCompareCacheSource(teamNumbers: number[]): string {
+  return `team_compare_${hashJsonValue(teamNumbers).slice(0, 12)}`;
+}
+
 async function buildResponse(
   routeContext: ReturnType<typeof beginRouteRequest>,
   rawTeams: unknown,
@@ -48,6 +55,21 @@ async function buildResponse(
   const teams = parseCompareTeams(rawTeams);
   if (!teams.length) {
     return NextResponse.json({ error: 'Missing teams' }, { status: 400 });
+  }
+  const cacheSource = buildTeamCompareCacheSource(teams);
+  const cachedPayload = await loadSnapshotCacheRecord<TeamCompareSnapshot>(
+    cacheSource,
+    eventKey || null,
+    null,
+    WARM_TEAM_COMPARE_MAX_AGE_SECONDS,
+  );
+  if (cachedPayload) {
+    return routeJson(routeContext, cachedPayload, undefined, {
+      eventKey: eventKey || null,
+      teamCount: teams.length,
+      cacheState: 'warm',
+      source: 'warm_cache',
+    });
   }
 
   const eventContext = eventKey ? await loadEventContext(eventKey) : null;
@@ -149,21 +171,27 @@ async function buildResponse(
     }),
   );
 
-  return routeJson(
-    routeContext,
-    {
-      generatedAtMs: Date.now(),
-      eventKey: eventKey || null,
-      event: eventContext?.tba.event ?? null,
-      fieldAverages,
-      teams: compareTeams,
-    },
-    undefined,
-    {
-      eventKey: eventKey || null,
-      teamCount: compareTeams.length,
-    },
-  );
+  const payload = {
+    generatedAtMs: Date.now(),
+    eventKey: eventKey || null,
+    event: eventContext?.tba.event ?? null,
+    fieldAverages,
+    teams: compareTeams,
+  } satisfies TeamCompareSnapshot;
+
+  void saveSnapshotCacheRecord({
+    source: cacheSource,
+    eventKey: eventKey || null,
+    teamNumber: null,
+    generatedAt: payload.generatedAtMs,
+    payload,
+  });
+
+  return routeJson(routeContext, payload, undefined, {
+    eventKey: eventKey || null,
+    teamCount: compareTeams.length,
+    cacheState: 'cold',
+  });
 }
 
 export async function GET(

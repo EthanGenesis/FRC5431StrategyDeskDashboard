@@ -143,7 +143,7 @@ export default function DataSuperTab({
               loadedTeam: loadedTeam || '',
               compareTeams: compareRequestTeams,
             }),
-            cache: 'no-store',
+            cache: 'default',
           },
           'DATA supertab load failed',
         );

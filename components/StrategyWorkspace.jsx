@@ -252,7 +252,7 @@ export default function StrategyWorkspace({
       try {
         const json = await fetchJsonOrThrow(
           `/api/event-context?eventKey=${encodeURIComponent(targetEventKey)}`,
-          { cache: 'no-store' },
+          { cache: 'default' },
           'Event context failed',
         );
         if (!cancelled) setEventContext(json);
@@ -736,7 +736,7 @@ export default function StrategyWorkspace({
           if (liveTeamStats[teamNumber]) return [teamNumber, liveTeamStats[teamNumber]];
           const json = await fetchJsonOrThrow(
             `/api/team-profile?team=${encodeURIComponent(String(teamNumber))}&summaryOnly=1`,
-            { cache: 'no-store' },
+            { cache: 'default' },
             `Failed to load live stats for ${teamNumber}`,
           );
           return [teamNumber, json];

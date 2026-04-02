@@ -3,6 +3,7 @@ import type { ExternalRecord } from '../../../lib/types';
 import type { PreEventScoutResponse } from '../../../lib/strategy-types';
 import { getAppEnv } from '../../../lib/env';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { loadSnapshotCacheRecord, saveSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { safeResolve, parseRequiredEventKey } from '../../../lib/server-data';
 import {
   buildSeasonRollups,
@@ -15,6 +16,7 @@ import { tbaGet } from '../../../lib/tba';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const WARM_PRE_EVENT_SCOUT_MAX_AGE_SECONDS = 300;
 
 type TbaTeamSimple = {
   team_number?: number;
@@ -30,6 +32,19 @@ export async function GET(
 
   try {
     const eventKey = parseRequiredEventKey(searchParams.get('eventKey') ?? '');
+    const cachedPayload = await loadSnapshotCacheRecord<PreEventScoutResponse>(
+      'pre_event_scout',
+      eventKey,
+      null,
+      WARM_PRE_EVENT_SCOUT_MAX_AGE_SECONDS,
+    );
+    if (cachedPayload) {
+      return routeJson(routeContext, cachedPayload, undefined, {
+        eventKey,
+        cacheState: 'warm',
+        source: 'warm_cache',
+      });
+    }
     const { TBA_AUTH_KEY } = getAppEnv();
 
     const [event, tbaTeams] = await Promise.all([
@@ -76,20 +91,26 @@ export async function GET(
       }),
     );
 
-    return routeJson(
-      routeContext,
-      {
-        generatedAtMs: Date.now(),
-        eventKey,
-        event: (event as ExternalRecord | null) ?? null,
-        teams: seasonTeams,
-      },
-      undefined,
-      {
-        eventKey,
-        teamCount: seasonTeams.length,
-      },
-    );
+    const payload = {
+      generatedAtMs: Date.now(),
+      eventKey,
+      event: (event as ExternalRecord | null) ?? null,
+      teams: seasonTeams,
+    } satisfies PreEventScoutResponse;
+
+    void saveSnapshotCacheRecord({
+      source: 'pre_event_scout',
+      eventKey,
+      teamNumber: null,
+      generatedAt: payload.generatedAtMs,
+      payload,
+    });
+
+    return routeJson(routeContext, payload, undefined, {
+      eventKey,
+      teamCount: seasonTeams.length,
+      cacheState: 'cold',
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown pre-event scout error';
     const status = message === 'Missing TBA_AUTH_KEY in .env.local' ? 500 : 400;
