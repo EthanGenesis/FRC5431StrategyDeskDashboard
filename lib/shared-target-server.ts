@@ -30,7 +30,9 @@ import { fetchTeamEventCatalog } from './team-event-catalog';
 
 const SUPABASE_READ_TIMEOUT_MS = 5000;
 const SUPABASE_WRITE_TIMEOUT_MS = 5000;
-const DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS = 12000;
+const DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS = 20000;
+const DURABLE_SHARED_TARGET_CONFIRM_TIMEOUT_MS = 12000;
+const DURABLE_SHARED_TARGET_CONFIRM_POLL_MS = 750;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;
 const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
@@ -94,12 +96,22 @@ function logSharedTargetPersistenceWarning(event: string, detail: string): void 
   );
 }
 
+function errorLooksLikeTimeout(error: unknown): boolean {
+  return typeof error === 'string' && error.toLowerCase().includes('timed out');
+}
+
 async function withWriteTimeout<T>(
   operation: () => PromiseLike<T> | T,
   label: string,
   timeoutMs = SUPABASE_WRITE_TIMEOUT_MS,
 ): Promise<T> {
   return withTimeout(Promise.resolve(operation()), label, timeoutMs);
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function saveSharedActiveTargetHotCache(target: SharedActiveTarget): Promise<void> {
@@ -149,6 +161,67 @@ function refreshStatusRowFromStatus(
     detail: status.detail ?? {},
     updated_at: new Date().toISOString(),
   };
+}
+
+async function loadPersistedSharedActiveTarget(
+  admin: AdminClient,
+  timeoutMs = SUPABASE_READ_TIMEOUT_MS,
+): Promise<SharedActiveTarget | null> {
+  const response = await withTimeout(
+    admin
+      .from(PERSISTENCE_TABLES.activeTarget)
+      .select('*')
+      .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
+      .maybeSingle(),
+    'load persisted shared active target',
+    timeoutMs,
+  );
+
+  if (response.error || !response.data) {
+    return null;
+  }
+
+  return normalizeSharedActiveTarget(response.data);
+}
+
+function sharedActiveTargetMatchesExpected(
+  actual: SharedActiveTarget | null | undefined,
+  expected: SharedActiveTarget,
+): boolean {
+  if (!actual) return false;
+
+  return (
+    actual.workspaceKey === expected.workspaceKey &&
+    actual.seasonYear === expected.seasonYear &&
+    actual.teamNumber === expected.teamNumber &&
+    actual.eventKey === expected.eventKey &&
+    actual.eventName === expected.eventName &&
+    actual.eventShortName === expected.eventShortName &&
+    actual.eventLocation === expected.eventLocation &&
+    actual.startDate === expected.startDate &&
+    actual.endDate === expected.endDate &&
+    actual.refreshState === expected.refreshState &&
+    actual.refreshError === expected.refreshError
+  );
+}
+
+async function confirmSharedActiveTargetPersistence(
+  admin: AdminClient,
+  expected: SharedActiveTarget,
+): Promise<SharedActiveTarget | null> {
+  const deadline = Date.now() + DURABLE_SHARED_TARGET_CONFIRM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const persisted = await loadPersistedSharedActiveTarget(admin, 4000);
+      if (sharedActiveTargetMatchesExpected(persisted, expected)) {
+        return persisted;
+      }
+    } catch {
+      // Keep polling until the confirmation window closes.
+    }
+    await delay(DURABLE_SHARED_TARGET_CONFIRM_POLL_MS);
+  }
+  return null;
 }
 
 export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
@@ -250,6 +323,15 @@ export async function saveSharedActiveTarget(
         'shared_active_target_write_failed',
         response.error.message,
       );
+      if (options.requirePersistence && errorLooksLikeTimeout(response.error.message)) {
+        const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
+        if (confirmed) {
+          markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+          await saveSharedActiveTargetHotCache(confirmed);
+          await invalidateBootstrapHotCache();
+          return confirmed;
+        }
+      }
       if (options.requirePersistence) {
         throw new Error(response.error.message);
       }
@@ -268,6 +350,18 @@ export async function saveSharedActiveTarget(
       'shared_active_target_write_failed',
       error instanceof Error ? error.message : 'Unknown shared active target write error',
     );
+    if (
+      options.requirePersistence &&
+      errorLooksLikeTimeout(error instanceof Error ? error.message : error)
+    ) {
+      const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
+      if (confirmed) {
+        markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+        await saveSharedActiveTargetHotCache(confirmed);
+        await invalidateBootstrapHotCache();
+        return confirmed;
+      }
+    }
     if (options.requirePersistence) {
       throw error;
     }
