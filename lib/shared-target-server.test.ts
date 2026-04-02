@@ -5,6 +5,7 @@ const sharedTargetServerMocks = vi.hoisted(() => ({
   loadHotCacheJson: vi.fn(),
   saveHotCacheJson: vi.fn(),
   deleteHotCacheKey: vi.fn(),
+  getPostgresServerClient: vi.fn(),
   isSupabaseServiceConfigured: vi.fn(),
   createSupabaseAdminClient: vi.fn(),
   markPersistenceFailure: vi.fn(),
@@ -19,6 +20,10 @@ vi.mock('./hot-cache-server', () => ({
   loadHotCacheJson: sharedTargetServerMocks.loadHotCacheJson,
   saveHotCacheJson: sharedTargetServerMocks.saveHotCacheJson,
   deleteHotCacheKey: sharedTargetServerMocks.deleteHotCacheKey,
+}));
+
+vi.mock('./postgres-server', () => ({
+  getPostgresServerClient: sharedTargetServerMocks.getPostgresServerClient,
 }));
 
 vi.mock('./supabase', () => ({
@@ -67,6 +72,7 @@ describe('saveSharedActiveTarget', () => {
       meta: {},
     });
     sharedTargetServerMocks.deleteHotCacheKey.mockResolvedValue(undefined);
+    sharedTargetServerMocks.getPostgresServerClient.mockReturnValue(null);
     sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(true);
     sharedTargetServerMocks.shouldBypassPersistence.mockReturnValue(false);
     sharedTargetServerMocks.upsert.mockResolvedValue({ error: null });
@@ -114,6 +120,55 @@ describe('saveSharedActiveTarget', () => {
     expect(result.teamNumber).toBe(5431);
     expect(result.eventKey).toBe('2026txcle');
     expect(result.refreshState).toBe('loading');
+  });
+
+  it('uses direct Postgres persistence when configured', async () => {
+    const unsafe = vi.fn().mockResolvedValue([
+      {
+        workspace_key: 'shared',
+        season_year: 2026,
+        team_number: 5431,
+        event_key: '2026txcle',
+        event_name: 'FIT District Space City @ League City Event #1',
+        event_short_name: 'Space City #1',
+        event_location: 'League City, TX, USA',
+        start_date: '2026-03-07',
+        end_date: '2026-03-09',
+        last_snapshot_generated_at: null,
+        last_event_context_generated_at: null,
+        last_team_catalog_generated_at: null,
+        last_refreshed_at: null,
+        refresh_state: 'idle',
+        refresh_error: null,
+        updated_at: '2026-04-02T00:00:00.000Z',
+      },
+    ]);
+    sharedTargetServerMocks.getPostgresServerClient.mockReturnValue({
+      unsafe,
+    });
+    sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(false);
+
+    const result = await saveSharedActiveTarget(
+      {
+        teamNumber: 5431,
+        eventKey: '2026txcle',
+        eventName: 'FIT District Space City @ League City Event #1',
+        eventShortName: 'Space City #1',
+        eventLocation: 'League City, TX, USA',
+        startDate: '2026-03-07',
+        endDate: '2026-03-09',
+      },
+      {
+        baseTarget: EMPTY_SHARED_ACTIVE_TARGET,
+        requirePersistence: true,
+      },
+    );
+
+    expect(unsafe).toHaveBeenCalledTimes(1);
+    expect(sharedTargetServerMocks.createSupabaseAdminClient).not.toHaveBeenCalled();
+    expect(result.teamNumber).toBe(5431);
+    expect(result.eventKey).toBe('2026txcle');
+    expect(sharedTargetServerMocks.saveHotCacheJson).toHaveBeenCalled();
   });
 
   it('throws instead of faking success when durable persistence is required and the write fails', async () => {

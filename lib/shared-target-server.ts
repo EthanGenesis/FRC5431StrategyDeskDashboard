@@ -11,6 +11,7 @@ import {
   shouldBypassPersistence,
 } from './persistence-circuit-breaker';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
+import { getPostgresServerClient } from './postgres-server';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 import {
@@ -39,6 +40,7 @@ const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
 const SHARED_TARGET_WRITE_SCOPE = 'shared-target-write';
 
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
+type PostgresClient = NonNullable<ReturnType<typeof getPostgresServerClient>>;
 
 export type TeamEventCatalogResult = {
   generatedAt: string;
@@ -83,6 +85,10 @@ async function withTimeout<T>(
 function getAdminClient(): AdminClient | null {
   if (!isSupabaseServiceConfigured()) return null;
   return createSupabaseAdminClient();
+}
+
+function getPostgresClient(): PostgresClient | null {
+  return getPostgresServerClient();
 }
 
 function logSharedTargetPersistenceWarning(event: string, detail: string): void {
@@ -184,6 +190,28 @@ async function loadPersistedSharedActiveTarget(
   return normalizeSharedActiveTarget(response.data);
 }
 
+async function loadPersistedSharedActiveTargetViaPostgres(
+  client: PostgresClient,
+  timeoutMs = SUPABASE_READ_TIMEOUT_MS,
+): Promise<SharedActiveTarget | null> {
+  const rows = await withTimeout(
+    client.unsafe(
+      `
+        select *
+        from public.tbsb_active_target
+        where workspace_key = $1
+        limit 1
+      `,
+      [ACTIVE_TARGET_WORKSPACE_KEY],
+    ),
+    'load persisted shared active target',
+    timeoutMs,
+  );
+
+  const row = Array.isArray(rows) ? rows[0] : null;
+  return row ? normalizeSharedActiveTarget(row) : null;
+}
+
 function sharedActiveTargetMatchesExpected(
   actual: SharedActiveTarget | null | undefined,
   expected: SharedActiveTarget,
@@ -210,9 +238,12 @@ async function confirmSharedActiveTargetPersistence(
   expected: SharedActiveTarget,
 ): Promise<SharedActiveTarget | null> {
   const deadline = Date.now() + DURABLE_SHARED_TARGET_CONFIRM_TIMEOUT_MS;
+  const postgres = getPostgresClient();
   while (Date.now() < deadline) {
     try {
-      const persisted = await loadPersistedSharedActiveTarget(admin, 4000);
+      const persisted = postgres
+        ? await loadPersistedSharedActiveTargetViaPostgres(postgres, 4000)
+        : await loadPersistedSharedActiveTarget(admin, 4000);
       if (sharedActiveTargetMatchesExpected(persisted, expected)) {
         return persisted;
       }
@@ -229,6 +260,27 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
   const hotCacheValue = await loadHotCacheJson<SharedActiveTarget>(hotCacheKey);
   if (hotCacheValue.value && !hotCacheValue.isStale) {
     return normalizeSharedActiveTarget(hotCacheValue.value);
+  }
+
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const persisted = await loadPersistedSharedActiveTargetViaPostgres(postgres);
+      if (persisted) {
+        void saveHotCacheJson(hotCacheKey, persisted, {
+          freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
+          staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
+        });
+        markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
+        return persisted;
+      }
+    } catch (error) {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_active_target_read_failed',
+        error instanceof Error ? error.message : 'Unknown shared active target read error',
+      );
+    }
   }
 
   const admin = getAdminClient();
@@ -298,7 +350,95 @@ export async function saveSharedActiveTarget(
     workspaceKey: ACTIVE_TARGET_WORKSPACE_KEY,
     seasonYear: ACTIVE_TARGET_SEASON_YEAR,
   });
+  const postgres = getPostgresClient();
   const admin = getAdminClient();
+  if (postgres) {
+    try {
+      const rows = await withWriteTimeout(
+        () =>
+          postgres.unsafe(
+            `
+              insert into public.tbsb_active_target (
+                workspace_key,
+                season_year,
+                team_number,
+                event_key,
+                event_name,
+                event_short_name,
+                event_location,
+                start_date,
+                end_date,
+                last_snapshot_generated_at,
+                last_event_context_generated_at,
+                last_team_catalog_generated_at,
+                last_refreshed_at,
+                refresh_state,
+                refresh_error,
+                updated_at
+              )
+              values (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+              )
+              on conflict (workspace_key) do update set
+                season_year = excluded.season_year,
+                team_number = excluded.team_number,
+                event_key = excluded.event_key,
+                event_name = excluded.event_name,
+                event_short_name = excluded.event_short_name,
+                event_location = excluded.event_location,
+                start_date = excluded.start_date,
+                end_date = excluded.end_date,
+                last_snapshot_generated_at = excluded.last_snapshot_generated_at,
+                last_event_context_generated_at = excluded.last_event_context_generated_at,
+                last_team_catalog_generated_at = excluded.last_team_catalog_generated_at,
+                last_refreshed_at = excluded.last_refreshed_at,
+                refresh_state = excluded.refresh_state,
+                refresh_error = excluded.refresh_error,
+                updated_at = excluded.updated_at
+              returning *
+            `,
+            [
+              next.workspaceKey,
+              next.seasonYear,
+              next.teamNumber,
+              next.eventKey || null,
+              next.eventName || '',
+              next.eventShortName || '',
+              next.eventLocation || '',
+              next.startDate,
+              next.endDate,
+              next.lastSnapshotGeneratedAt,
+              next.lastEventContextGeneratedAt,
+              next.lastTeamCatalogGeneratedAt,
+              next.lastRefreshedAt,
+              next.refreshState,
+              next.refreshError,
+              new Date().toISOString(),
+            ],
+          ),
+        'save shared active target',
+        options.requirePersistence
+          ? DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS
+          : SUPABASE_WRITE_TIMEOUT_MS,
+      );
+      const persisted = normalizeSharedActiveTarget(
+        Array.isArray(rows) && rows[0] ? rows[0] : activeTargetRowFromTarget(next),
+      );
+      markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+      await saveSharedActiveTargetHotCache(persisted);
+      await invalidateBootstrapHotCache();
+      return persisted;
+    } catch (error) {
+      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_active_target_postgres_write_failed',
+        error instanceof Error
+          ? error.message
+          : 'Unknown shared active target Postgres write error',
+      );
+    }
+  }
+
   if (!admin) {
     await saveSharedActiveTargetHotCache(next);
     await invalidateBootstrapHotCache();
@@ -378,6 +518,40 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
     return normalizeSharedRefreshStatus(hotCacheValue.value);
   }
 
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withTimeout(
+        postgres.unsafe(
+          `
+            select *
+            from public.tbsb_refresh_status
+            where workspace_key = $1
+            limit 1
+          `,
+          [ACTIVE_TARGET_WORKSPACE_KEY],
+        ),
+        'load shared refresh status',
+      );
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (row) {
+        const normalized = normalizeSharedRefreshStatus(row);
+        void saveHotCacheJson(hotCacheKey, normalized, {
+          freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
+          staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
+        });
+        markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
+        return normalized;
+      }
+    } catch (error) {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_refresh_status_read_failed',
+        error instanceof Error ? error.message : 'Unknown shared refresh status read error',
+      );
+    }
+  }
+
   const admin = getAdminClient();
   if (!admin) {
     return hotCacheValue.value
@@ -441,6 +615,64 @@ export async function saveSharedRefreshStatus(
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
   await invalidateBootstrapHotCache();
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withWriteTimeout(
+        () =>
+          postgres.unsafe(
+            `
+              insert into public.tbsb_refresh_status (
+                workspace_key,
+                state,
+                last_run_at,
+                last_success_at,
+                last_error_at,
+                last_error,
+                detail,
+                updated_at
+              )
+              values ($1, $2, $3, $4, $5, $6, $7, $8)
+              on conflict (workspace_key) do update set
+                state = excluded.state,
+                last_run_at = excluded.last_run_at,
+                last_success_at = excluded.last_success_at,
+                last_error_at = excluded.last_error_at,
+                last_error = excluded.last_error,
+                detail = excluded.detail,
+                updated_at = excluded.updated_at
+              returning *
+            `,
+            [
+              next.workspaceKey,
+              next.state,
+              next.lastRunAt,
+              next.lastSuccessAt,
+              next.lastErrorAt,
+              next.lastError,
+              next.detail ?? {},
+              new Date().toISOString(),
+            ],
+          ),
+        'save shared refresh status',
+      );
+
+      const persisted = normalizeSharedRefreshStatus(
+        Array.isArray(rows) && rows[0] ? rows[0] : refreshStatusRowFromStatus(next),
+      );
+      markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+      return persisted;
+    } catch (error) {
+      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_refresh_status_postgres_write_failed',
+        error instanceof Error
+          ? error.message
+          : 'Unknown shared refresh status Postgres write error',
+      );
+    }
+  }
+
   const admin = getAdminClient();
   if (!admin) return next;
 

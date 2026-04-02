@@ -118,6 +118,7 @@ Optional for proxy / hot-cache cutover:
 - `HOT_DATA_PLANE_PROXY_ROUTES`
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
+- `POSTGRES_URL`
 
 Do not commit `.env.local`.
 
@@ -248,12 +249,14 @@ UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 HOT_CACHE_FRESH_SECONDS=15
 HOT_CACHE_STALE_SECONDS=60
+POSTGRES_URL=
 ```
 
 Rules:
 
 - `NEXT_PUBLIC_*` values are safe for the browser
 - `SUPABASE_SERVICE_ROLE_KEY` is server-only
+- `POSTGRES_URL` is optional, server-only, and should use your Supabase direct or pooler connection string
 - never expose the service role key in client code
 - in this model, the publishable key is intentionally enough to read and write the event-scoped shared workspace tables allowed by RLS
 - server-side cache writes use the service-role client, which bypasses RLS; you do not need separate RLS write policies for that server-only path

@@ -1,5 +1,6 @@
 import { DEFAULT_COMPARE_DRAFT } from './compare-storage';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
+import { getPostgresServerClient } from './postgres-server';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 import type { CompareDraft, CompareSet } from './types';
@@ -20,9 +21,21 @@ export type NamedArtifactTable =
   | typeof PERSISTENCE_TABLES.pickLists
   | typeof PERSISTENCE_TABLES.playoffResults;
 
+const NAMED_ARTIFACT_TABLES = new Set<NamedArtifactTable>([
+  PERSISTENCE_TABLES.compareSets,
+  PERSISTENCE_TABLES.predictScenarios,
+  PERSISTENCE_TABLES.allianceScenarios,
+  PERSISTENCE_TABLES.pickLists,
+  PERSISTENCE_TABLES.playoffResults,
+]);
+
 function getAdminClient() {
   if (!isSupabaseServiceConfigured()) return null;
   return createSupabaseAdminClient();
+}
+
+function getPostgresClient() {
+  return getPostgresServerClient();
 }
 
 function logWorkspaceReadFailure(scope: string, workspaceKey: string, detail: string): void {
@@ -88,6 +101,33 @@ export async function loadCompareDraftSharedServer(
   const scopedWorkspaceKey = String(workspaceKey ?? '').trim();
   if (!scopedWorkspaceKey) return DEFAULT_COMPARE_DRAFT;
 
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withTimeout(
+        postgres.unsafe(
+          `
+            select payload
+            from public.tbsb_compare_drafts
+            where workspace_key = $1
+              and scope = $2
+            limit 1
+          `,
+          [scopedWorkspaceKey, scope],
+        ),
+        `load compare draft for ${scopedWorkspaceKey}`,
+      );
+      const row = Array.isArray(rows) ? rows[0] : null;
+      return normalizeCompareDraft((isRecord(row) ? row.payload : null) as CompareDraft | null);
+    } catch (error) {
+      logWorkspaceReadFailure(
+        'compare_draft_postgres_read_failed',
+        scopedWorkspaceKey,
+        error instanceof Error ? error.message : 'Unknown compare draft Postgres read error',
+      );
+    }
+  }
+
   const admin = getAdminClient();
   if (!admin) return DEFAULT_COMPARE_DRAFT;
 
@@ -128,6 +168,31 @@ export async function loadCompareSetsSharedServer(
   const scopedWorkspaceKey = String(workspaceKey ?? '').trim();
   if (!scopedWorkspaceKey) return [];
 
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withTimeout(
+        postgres.unsafe(
+          `
+            select payload
+            from public.tbsb_compare_sets
+            where workspace_key = $1
+            order by updated_at desc
+          `,
+          [scopedWorkspaceKey],
+        ),
+        `load compare sets for ${scopedWorkspaceKey}`,
+      );
+      return extractPayloadArray<CompareSet>(rows);
+    } catch (error) {
+      logWorkspaceReadFailure(
+        'compare_sets_postgres_read_failed',
+        scopedWorkspaceKey,
+        error instanceof Error ? error.message : 'Unknown compare sets Postgres read error',
+      );
+    }
+  }
+
   const admin = getAdminClient();
   if (!admin) return [];
 
@@ -167,6 +232,32 @@ export async function loadNamedArtifactsSharedServer<T extends NamedArtifact>(
 ): Promise<T[]> {
   const scopedWorkspaceKey = String(workspaceKey ?? '').trim();
   if (!scopedWorkspaceKey) return [];
+  if (!NAMED_ARTIFACT_TABLES.has(table)) return [];
+
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withTimeout(
+        postgres.unsafe(
+          `
+            select payload
+            from public.${table}
+            where workspace_key = $1
+            order by updated_at desc
+          `,
+          [scopedWorkspaceKey],
+        ),
+        `load named artifacts for ${scopedWorkspaceKey}`,
+      );
+      return extractPayloadArray<T>(rows);
+    } catch (error) {
+      logWorkspaceReadFailure(
+        'named_artifacts_postgres_read_failed',
+        scopedWorkspaceKey,
+        error instanceof Error ? error.message : 'Unknown named artifacts Postgres read error',
+      );
+    }
+  }
 
   const admin = getAdminClient();
   if (!admin) return [];

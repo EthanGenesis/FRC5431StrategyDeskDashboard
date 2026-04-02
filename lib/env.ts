@@ -61,6 +61,10 @@ const supabaseServiceEnvSchema = supabasePublicEnvSchema.extend({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'Missing SUPABASE_SERVICE_ROLE_KEY in .env.local'),
 });
 
+const postgresEnvSchema = z.object({
+  POSTGRES_URL: z.string().min(1, 'Missing POSTGRES_URL in .env.local'),
+});
+
 const hotDataPlaneEnvSchema = z.object({
   HOT_DATA_PLANE_URL: z.string().url('Missing or invalid HOT_DATA_PLANE_URL in .env.local'),
   HOT_DATA_PLANE_BEARER_TOKEN: z.string().trim().optional(),
@@ -80,6 +84,7 @@ export type FirstApiEnv = z.infer<typeof firstApiEnvSchema>;
 export type NexusEnv = z.infer<typeof nexusEnvSchema>;
 export type SupabasePublicEnv = z.infer<typeof supabasePublicEnvSchema>;
 export type SupabaseServiceEnv = z.infer<typeof supabaseServiceEnvSchema>;
+export type PostgresEnv = z.infer<typeof postgresEnvSchema>;
 export type HotDataPlaneEnv = Omit<
   z.infer<typeof hotDataPlaneEnvSchema>,
   'HOT_DATA_PLANE_PROXY_ROUTES'
@@ -93,6 +98,7 @@ let parsedFirstApiEnv: FirstApiEnv | null = null;
 let parsedNexusEnv: NexusEnv | null = null;
 let parsedSupabasePublicEnv: SupabasePublicEnv | null = null;
 let parsedSupabaseServiceEnv: SupabaseServiceEnv | null = null;
+let parsedPostgresEnv: PostgresEnv | null = null;
 let parsedHotDataPlaneEnv: HotDataPlaneEnv | null = null;
 let parsedHotCacheEnv: HotCacheEnv | null = null;
 
@@ -101,6 +107,21 @@ function getSupabasePublishableKey(): string | undefined {
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = candidate?.trim();
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
+
+function getPostgresUrl(): string | undefined {
+  const candidates = [
+    process.env.POSTGRES_URL,
+    process.env.SUPABASE_DATABASE_URL,
+    process.env.SUPABASE_DB_URL,
   ];
 
   for (const candidate of candidates) {
@@ -208,6 +229,22 @@ export function getSupabaseServiceEnv(): SupabaseServiceEnv {
   });
 
   return parsedSupabaseServiceEnv;
+}
+
+export function hasPostgresEnv(): boolean {
+  return Boolean(getPostgresUrl());
+}
+
+export function getPostgresEnv(): PostgresEnv {
+  if (parsedPostgresEnv) {
+    return parsedPostgresEnv;
+  }
+
+  parsedPostgresEnv = postgresEnvSchema.parse({
+    POSTGRES_URL: getPostgresUrl(),
+  });
+
+  return parsedPostgresEnv;
 }
 
 export function hasHotDataPlaneEnv(): boolean {
