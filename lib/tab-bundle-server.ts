@@ -166,45 +166,49 @@ export async function resolveWarmBundle<T>(params: {
   });
 
   if (!params.forceRefresh) {
-    const cachedPayload = await loadWarmBundlePayloadRecord<T>(
-      {
-        source: params.source,
-        workspaceKey: params.workspaceKey,
-        eventKey: params.eventKey,
-        teamNumber: params.teamNumber,
-        scenarioId: params.scenarioId,
-        variant: params.variant,
-      },
-      WARM_BUNDLE_MAX_AGE_SECONDS,
-    );
-    if (cachedPayload.payload != null) {
-      const status = await loadWarmBundleStatus(bundleKey);
-      const generatedAtMs =
-        typeof (cachedPayload.payload as { generatedAtMs?: unknown }).generatedAtMs === 'number'
-          ? Number((cachedPayload.payload as { generatedAtMs?: unknown }).generatedAtMs)
-          : Date.parse(String(cachedPayload.generatedAt ?? '')) || Date.now();
-      return {
-        generatedAtMs,
-        bundleKey,
-        cacheState: 'warm',
-        refreshState: status?.state ?? 'ready',
-        cacheLayer: cachedPayload.cacheLayer === 'none' ? 'supabase' : cachedPayload.cacheLayer,
-        bundleVersion: readMetaString(status?.meta, 'bundleVersion') ?? String(generatedAtMs),
-        etag:
-          readMetaString(status?.meta, 'etag') ??
-          cachedPayload.etag ??
-          hashJsonValue(cachedPayload.payload),
-        freshUntil:
-          readMetaString(status?.meta, 'freshUntil') ??
-          new Date(generatedAtMs + WARM_BUNDLE_MAX_AGE_SECONDS * 1000).toISOString(),
-        staleAt:
-          readMetaString(status?.meta, 'staleAt') ??
-          new Date(
-            generatedAtMs +
-              Math.max(WARM_BUNDLE_MAX_AGE_SECONDS + 60, WARM_BUNDLE_MAX_AGE_SECONDS * 3) * 1000,
-          ).toISOString(),
-        payload: cachedPayload.payload,
-      };
+    try {
+      const cachedPayload = await loadWarmBundlePayloadRecord<T>(
+        {
+          source: params.source,
+          workspaceKey: params.workspaceKey,
+          eventKey: params.eventKey,
+          teamNumber: params.teamNumber,
+          scenarioId: params.scenarioId,
+          variant: params.variant,
+        },
+        WARM_BUNDLE_MAX_AGE_SECONDS,
+      );
+      if (cachedPayload.payload != null) {
+        const status = await loadWarmBundleStatus(bundleKey).catch(() => null);
+        const generatedAtMs =
+          typeof (cachedPayload.payload as { generatedAtMs?: unknown }).generatedAtMs === 'number'
+            ? Number((cachedPayload.payload as { generatedAtMs?: unknown }).generatedAtMs)
+            : Date.parse(String(cachedPayload.generatedAt ?? '')) || Date.now();
+        return {
+          generatedAtMs,
+          bundleKey,
+          cacheState: 'warm',
+          refreshState: status?.state ?? 'ready',
+          cacheLayer: cachedPayload.cacheLayer === 'none' ? 'supabase' : cachedPayload.cacheLayer,
+          bundleVersion: readMetaString(status?.meta, 'bundleVersion') ?? String(generatedAtMs),
+          etag:
+            readMetaString(status?.meta, 'etag') ??
+            cachedPayload.etag ??
+            hashJsonValue(cachedPayload.payload),
+          freshUntil:
+            readMetaString(status?.meta, 'freshUntil') ??
+            new Date(generatedAtMs + WARM_BUNDLE_MAX_AGE_SECONDS * 1000).toISOString(),
+          staleAt:
+            readMetaString(status?.meta, 'staleAt') ??
+            new Date(
+              generatedAtMs +
+                Math.max(WARM_BUNDLE_MAX_AGE_SECONDS + 60, WARM_BUNDLE_MAX_AGE_SECONDS * 3) * 1000,
+            ).toISOString(),
+          payload: cachedPayload.payload,
+        };
+      }
+    } catch {
+      // Warm-cache lookups should never block a cold rebuild path.
     }
   }
 
@@ -222,7 +226,7 @@ export async function resolveWarmBundle<T>(params: {
     ...baseBundleStatus,
     state: 'loading',
     ...(params.meta != null ? { meta: params.meta } : {}),
-  });
+  }).catch(() => null);
 
   try {
     const payload = await params.build();
@@ -248,7 +252,7 @@ export async function resolveWarmBundle<T>(params: {
       payload,
       state: 'ready',
       meta: bundleMeta,
-    });
+    }).catch(() => null);
 
     return {
       generatedAtMs: generatedAt,
@@ -268,7 +272,7 @@ export async function resolveWarmBundle<T>(params: {
       state: 'error',
       error: error instanceof Error ? error.message : 'Unknown warm bundle error',
       ...(params.meta != null ? { meta: params.meta } : {}),
-    });
+    }).catch(() => null);
     throw error;
   }
 }
