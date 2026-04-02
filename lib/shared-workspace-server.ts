@@ -25,6 +25,18 @@ function getAdminClient() {
   return createSupabaseAdminClient();
 }
 
+function logWorkspaceReadFailure(scope: string, workspaceKey: string, detail: string): void {
+  console.warn(
+    JSON.stringify({
+      level: 'warn',
+      event: scope,
+      ts: new Date().toISOString(),
+      workspaceKey,
+      detail,
+    }),
+  );
+}
+
 async function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -79,21 +91,35 @@ export async function loadCompareDraftSharedServer(
   const admin = getAdminClient();
   if (!admin) return DEFAULT_COMPARE_DRAFT;
 
-  const response = await withTimeout(
-    admin
-      .from(PERSISTENCE_TABLES.compareDrafts)
-      .select('payload')
-      .eq('workspace_key', scopedWorkspaceKey)
-      .eq('scope', scope)
-      .maybeSingle(),
-    `load compare draft for ${scopedWorkspaceKey}`,
-  );
+  try {
+    const response = await withTimeout(
+      admin
+        .from(PERSISTENCE_TABLES.compareDrafts)
+        .select('payload')
+        .eq('workspace_key', scopedWorkspaceKey)
+        .eq('scope', scope)
+        .maybeSingle(),
+      `load compare draft for ${scopedWorkspaceKey}`,
+    );
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      logWorkspaceReadFailure(
+        'compare_draft_read_failed',
+        scopedWorkspaceKey,
+        response.error.message,
+      );
+      return DEFAULT_COMPARE_DRAFT;
+    }
+
+    return normalizeCompareDraft((response.data?.payload ?? null) as CompareDraft | null);
+  } catch (error) {
+    logWorkspaceReadFailure(
+      'compare_draft_read_failed',
+      scopedWorkspaceKey,
+      error instanceof Error ? error.message : 'Unknown compare draft read error',
+    );
+    return DEFAULT_COMPARE_DRAFT;
   }
-
-  return normalizeCompareDraft((response.data?.payload ?? null) as CompareDraft | null);
 }
 
 export async function loadCompareSetsSharedServer(
@@ -105,20 +131,34 @@ export async function loadCompareSetsSharedServer(
   const admin = getAdminClient();
   if (!admin) return [];
 
-  const response = await withTimeout(
-    admin
-      .from(PERSISTENCE_TABLES.compareSets)
-      .select('payload')
-      .eq('workspace_key', scopedWorkspaceKey)
-      .order('updated_at', { ascending: false }),
-    `load compare sets for ${scopedWorkspaceKey}`,
-  );
+  try {
+    const response = await withTimeout(
+      admin
+        .from(PERSISTENCE_TABLES.compareSets)
+        .select('payload')
+        .eq('workspace_key', scopedWorkspaceKey)
+        .order('updated_at', { ascending: false }),
+      `load compare sets for ${scopedWorkspaceKey}`,
+    );
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      logWorkspaceReadFailure(
+        'compare_sets_read_failed',
+        scopedWorkspaceKey,
+        response.error.message,
+      );
+      return [];
+    }
+
+    return extractPayloadArray<CompareSet>(response.data);
+  } catch (error) {
+    logWorkspaceReadFailure(
+      'compare_sets_read_failed',
+      scopedWorkspaceKey,
+      error instanceof Error ? error.message : 'Unknown compare sets read error',
+    );
+    return [];
   }
-
-  return extractPayloadArray<CompareSet>(response.data);
 }
 
 export async function loadNamedArtifactsSharedServer<T extends NamedArtifact>(
@@ -131,20 +171,34 @@ export async function loadNamedArtifactsSharedServer<T extends NamedArtifact>(
   const admin = getAdminClient();
   if (!admin) return [];
 
-  const response = await withTimeout(
-    admin
-      .from(table)
-      .select('payload')
-      .eq('workspace_key', scopedWorkspaceKey)
-      .order('updated_at', { ascending: false }),
-    `load named artifacts for ${scopedWorkspaceKey}`,
-  );
+  try {
+    const response = await withTimeout(
+      admin
+        .from(table)
+        .select('payload')
+        .eq('workspace_key', scopedWorkspaceKey)
+        .order('updated_at', { ascending: false }),
+      `load named artifacts for ${scopedWorkspaceKey}`,
+    );
 
-  if (response.error) {
-    throw new Error(response.error.message);
+    if (response.error) {
+      logWorkspaceReadFailure(
+        'named_artifacts_read_failed',
+        scopedWorkspaceKey,
+        response.error.message,
+      );
+      return [];
+    }
+
+    return extractPayloadArray<T>(response.data);
+  } catch (error) {
+    logWorkspaceReadFailure(
+      'named_artifacts_read_failed',
+      scopedWorkspaceKey,
+      error instanceof Error ? error.message : 'Unknown named artifacts read error',
+    );
+    return [];
   }
-
-  return extractPayloadArray<T>(response.data);
 }
 
 export function storageIdForWorkspaceArtifact(workspaceKey: string, id: string): string {

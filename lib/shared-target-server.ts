@@ -93,10 +93,7 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-async function withWriteRetry<T>(
-  operation: () => PromiseLike<T> | T,
-  label: string,
-): Promise<T> {
+async function withWriteRetry<T>(operation: () => PromiseLike<T> | T, label: string): Promise<T> {
   try {
     return await withTimeout(Promise.resolve(operation()), label, SUPABASE_WRITE_TIMEOUT_MS);
   } catch (error) {
@@ -106,11 +103,7 @@ async function withWriteRetry<T>(
     }
 
     await delay(SUPABASE_WRITE_RETRY_DELAY_MS);
-    return withTimeout(
-      Promise.resolve(operation()),
-      `${label} retry`,
-      SUPABASE_WRITE_TIMEOUT_MS,
-    );
+    return withTimeout(Promise.resolve(operation()), `${label} retry`, SUPABASE_WRITE_TIMEOUT_MS);
   }
 }
 
@@ -373,41 +366,45 @@ export async function loadTeamEventCatalog(
 
   const admin = getAdminClient();
   if (admin && !options.forceRefresh && !shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)) {
-    const response = await withTimeout(
-      admin
-        .from(PERSISTENCE_TABLES.teamEventCatalog)
-        .select('payload, generated_at, updated_at')
-        .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
-        .eq('team_number', normalizedTeam)
-        .eq('season_year', year)
-        .maybeSingle(),
-      `load team event catalog for ${normalizedTeam}`,
-    );
+    try {
+      const response = await withTimeout(
+        admin
+          .from(PERSISTENCE_TABLES.teamEventCatalog)
+          .select('payload, generated_at, updated_at')
+          .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
+          .eq('team_number', normalizedTeam)
+          .eq('season_year', year)
+          .maybeSingle(),
+        `load team event catalog for ${normalizedTeam}`,
+      );
 
-    if (response.error) {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-    } else if (response.data) {
-      const generatedAt =
-        readNullableString(response.data.generated_at) ??
-        readNullableString(response.data.updated_at) ??
-        new Date(0).toISOString();
-      const generatedAtMs = Date.parse(generatedAt);
-      if (
-        Number.isFinite(generatedAtMs) &&
-        Date.now() - generatedAtMs <= TEAM_EVENT_CATALOG_MAX_AGE_MS
-      ) {
-        const cachedResult = {
-          generatedAt,
-          cached: true,
-          events: normalizeTeamEventCatalog(response.data.payload),
-        };
-        void saveHotCacheJson(hotCacheKey, cachedResult, {
-          freshForSeconds: Math.max(15, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000)),
-          staleForSeconds: Math.max(60, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000) + 300),
-        });
-        markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
-        return cachedResult;
+      if (response.error) {
+        markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+      } else if (response.data) {
+        const generatedAt =
+          readNullableString(response.data.generated_at) ??
+          readNullableString(response.data.updated_at) ??
+          new Date(0).toISOString();
+        const generatedAtMs = Date.parse(generatedAt);
+        if (
+          Number.isFinite(generatedAtMs) &&
+          Date.now() - generatedAtMs <= TEAM_EVENT_CATALOG_MAX_AGE_MS
+        ) {
+          const cachedResult = {
+            generatedAt,
+            cached: true,
+            events: normalizeTeamEventCatalog(response.data.payload),
+          };
+          void saveHotCacheJson(hotCacheKey, cachedResult, {
+            freshForSeconds: Math.max(15, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000)),
+            staleForSeconds: Math.max(60, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000) + 300),
+          });
+          markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
+          return cachedResult;
+        }
       }
+    } catch {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
     }
   }
 
@@ -415,26 +412,30 @@ export async function loadTeamEventCatalog(
   const generatedAt = new Date().toISOString();
 
   if (admin) {
-    const response = await withWriteRetry(
-      () =>
-        admin.from(PERSISTENCE_TABLES.teamEventCatalog).upsert(
-          {
-            workspace_key: ACTIVE_TARGET_WORKSPACE_KEY,
-            team_number: normalizedTeam,
-            season_year: year,
-            payload: events,
-            generated_at: generatedAt,
-            updated_at: generatedAt,
-          },
-          { onConflict: 'workspace_key,team_number,season_year' },
-        ),
-      `save team event catalog for ${normalizedTeam}`,
-    );
-    if (response.error) {
+    try {
+      const response = await withWriteRetry(
+        () =>
+          admin.from(PERSISTENCE_TABLES.teamEventCatalog).upsert(
+            {
+              workspace_key: ACTIVE_TARGET_WORKSPACE_KEY,
+              team_number: normalizedTeam,
+              season_year: year,
+              payload: events,
+              generated_at: generatedAt,
+              updated_at: generatedAt,
+            },
+            { onConflict: 'workspace_key,team_number,season_year' },
+          ),
+        `save team event catalog for ${normalizedTeam}`,
+      );
+      if (response.error) {
+        markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+      } else {
+        markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+      }
+    } catch {
       markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
-      throw new Error(response.error.message);
     }
-    markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
   }
 
   const nextResult = {
