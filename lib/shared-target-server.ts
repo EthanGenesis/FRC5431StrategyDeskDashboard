@@ -5,6 +5,11 @@ import {
   buildTeamEventCatalogHotCacheKey,
 } from './hot-cache-keys';
 import { deleteHotCacheKey, loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
+import {
+  markPersistenceFailure,
+  markPersistenceSuccess,
+  shouldBypassPersistence,
+} from './persistence-circuit-breaker';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
@@ -26,6 +31,8 @@ import { fetchTeamEventCatalog } from './team-event-catalog';
 const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;
+const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
+const SHARED_TARGET_WRITE_SCOPE = 'shared-target-write';
 
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
 
@@ -121,6 +128,11 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
       ? normalizeSharedActiveTarget(hotCacheValue.value)
       : EMPTY_SHARED_ACTIVE_TARGET;
   }
+  if (shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)) {
+    return hotCacheValue.value
+      ? normalizeSharedActiveTarget(hotCacheValue.value)
+      : EMPTY_SHARED_ACTIVE_TARGET;
+  }
 
   try {
     const response = await withTimeout(
@@ -132,7 +144,13 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
       'load shared active target',
     );
 
-    if (response.error || !response.data) {
+    if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+      return hotCacheValue.value
+        ? normalizeSharedActiveTarget(hotCacheValue.value)
+        : EMPTY_SHARED_ACTIVE_TARGET;
+    }
+    if (!response.data) {
       return hotCacheValue.value
         ? normalizeSharedActiveTarget(hotCacheValue.value)
         : EMPTY_SHARED_ACTIVE_TARGET;
@@ -143,8 +161,10 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
       freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
       staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
     });
+    markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
     return normalized;
   } catch {
+    markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
     return hotCacheValue.value
       ? normalizeSharedActiveTarget(hotCacheValue.value)
       : EMPTY_SHARED_ACTIVE_TARGET;
@@ -174,6 +194,7 @@ export async function saveSharedActiveTarget(
   );
 
   if (response.error) {
+    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
     throw new Error(response.error.message);
   }
 
@@ -183,6 +204,7 @@ export async function saveSharedActiveTarget(
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
   void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
+  markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
   return savedTarget;
 }
 
@@ -199,6 +221,11 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
       ? normalizeSharedRefreshStatus(hotCacheValue.value)
       : EMPTY_SHARED_REFRESH_STATUS;
   }
+  if (shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)) {
+    return hotCacheValue.value
+      ? normalizeSharedRefreshStatus(hotCacheValue.value)
+      : EMPTY_SHARED_REFRESH_STATUS;
+  }
 
   try {
     const response = await withTimeout(
@@ -210,7 +237,13 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
       'load shared refresh status',
     );
 
-    if (response.error || !response.data) {
+    if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+      return hotCacheValue.value
+        ? normalizeSharedRefreshStatus(hotCacheValue.value)
+        : EMPTY_SHARED_REFRESH_STATUS;
+    }
+    if (!response.data) {
       return hotCacheValue.value
         ? normalizeSharedRefreshStatus(hotCacheValue.value)
         : EMPTY_SHARED_REFRESH_STATUS;
@@ -221,8 +254,10 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
       freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
       staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
     });
+    markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
     return normalized;
   } catch {
+    markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
     return hotCacheValue.value
       ? normalizeSharedRefreshStatus(hotCacheValue.value)
       : EMPTY_SHARED_REFRESH_STATUS;
@@ -251,6 +286,7 @@ export async function saveSharedRefreshStatus(
   );
 
   if (response.error) {
+    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
     throw new Error(response.error.message);
   }
 
@@ -260,6 +296,7 @@ export async function saveSharedRefreshStatus(
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
   void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
+  markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
   return savedStatus;
 }
 
@@ -296,7 +333,7 @@ export async function loadTeamEventCatalog(
   }
 
   const admin = getAdminClient();
-  if (admin && !options.forceRefresh) {
+  if (admin && !options.forceRefresh && !shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)) {
     const response = await withTimeout(
       admin
         .from(PERSISTENCE_TABLES.teamEventCatalog)
@@ -308,7 +345,9 @@ export async function loadTeamEventCatalog(
       `load team event catalog for ${normalizedTeam}`,
     );
 
-    if (!response.error && response.data) {
+    if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+    } else if (response.data) {
       const generatedAt =
         readNullableString(response.data.generated_at) ??
         readNullableString(response.data.updated_at) ??
@@ -327,6 +366,7 @@ export async function loadTeamEventCatalog(
           freshForSeconds: Math.max(15, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000)),
           staleForSeconds: Math.max(60, Math.floor(TEAM_EVENT_CATALOG_MAX_AGE_MS / 1000) + 300),
         });
+        markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
         return cachedResult;
       }
     }
@@ -351,8 +391,10 @@ export async function loadTeamEventCatalog(
       `save team event catalog for ${normalizedTeam}`,
     );
     if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
       throw new Error(response.error.message);
     }
+    markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
   }
 
   const nextResult = {

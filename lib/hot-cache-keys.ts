@@ -64,3 +64,7 @@ export function buildSnapshotHotCacheKey(
 export function buildUpstreamHotCacheKey(source: string, requestPath: string): string {
   return ['upstream_cache', readString(source) || 'source', readString(requestPath)].join('::');
 }
+
+export function buildEventLiveSignalsHotCacheKey(eventKey: string | null | undefined): string {
+  return ['event_live_signals', readString(eventKey) || 'none'].join('::');
+}

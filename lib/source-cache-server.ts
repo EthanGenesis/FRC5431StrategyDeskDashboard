@@ -1,15 +1,28 @@
 import { cachedFetchJson } from './httpCache';
-import { buildSnapshotHotCacheKey, buildUpstreamHotCacheKey } from './hot-cache-keys';
+import {
+  buildEventLiveSignalsHotCacheKey,
+  buildSnapshotHotCacheKey,
+  buildUpstreamHotCacheKey,
+} from './hot-cache-keys';
 import { loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
+import {
+  markPersistenceFailure,
+  markPersistenceSuccess,
+  shouldBypassPersistence,
+} from './persistence-circuit-breaker';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 import { getEventWorkspaceKey } from './workspace-key';
 
 type CacheSource = 'tba' | 'statbotics' | 'first' | 'nexus' | 'snapshot' | 'event_context';
-const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
+const SUPABASE_OPERATION_TIMEOUT_MS = 900;
 const SNAPSHOT_HOT_CACHE_FRESH_SECONDS = 90;
 const SNAPSHOT_HOT_CACHE_STALE_SECONDS = 240;
+const EVENT_LIVE_SIGNALS_HOT_CACHE_FRESH_SECONDS = 5;
+const EVENT_LIVE_SIGNALS_HOT_CACHE_STALE_SECONDS = 30;
+const EVENT_LIVE_SIGNALS_LIST_TIMEOUT_MS = 600;
+const SOURCE_CACHE_SCOPE = 'source-cache';
 
 type EventLiveSignalInput = {
   eventKey: string;
@@ -77,6 +90,39 @@ async function withTimeout<T>(
   }
 }
 
+function createEventLiveSignalRow(
+  input: EventLiveSignalInput & { workspaceKey: string; id?: string | null },
+) {
+  const timestamp = new Date().toISOString();
+  return {
+    id: input.id ?? null,
+    workspace_key: input.workspaceKey,
+    event_key: input.eventKey,
+    source: input.source,
+    signal_type: input.signalType,
+    title: input.title,
+    body: input.body,
+    dedupe_key: input.dedupeKey?.trim() ?? null,
+    payload: input.payload ?? {},
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+}
+
+async function primeEventLiveSignalsHotCache(
+  eventKey: string,
+  rows: Record<string, unknown>[],
+): Promise<void> {
+  await saveHotCacheJson(buildEventLiveSignalsHotCacheKey(eventKey), rows, {
+    freshForSeconds: EVENT_LIVE_SIGNALS_HOT_CACHE_FRESH_SECONDS,
+    staleForSeconds: EVENT_LIVE_SIGNALS_HOT_CACHE_STALE_SECONDS,
+  });
+}
+
+function readRowId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function getAdminClient() {
   if (!isSupabaseServiceConfigured()) {
     return {
@@ -103,6 +149,7 @@ export async function loadPersistedUpstreamCache<T>(
 
   const { client: admin } = getAdminClient();
   if (!admin) return null;
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) return null;
 
   const cacheKey = `${source}::${requestPath}`;
   try {
@@ -114,7 +161,11 @@ export async function loadPersistedUpstreamCache<T>(
         .maybeSingle(),
       `load persisted upstream cache for ${cacheKey}`,
     );
-    if (response.error || !response.data) return null;
+    if (response.error) {
+      markPersistenceFailure(SOURCE_CACHE_SCOPE);
+      return null;
+    }
+    if (!response.data) return null;
 
     const updatedAtMs = Date.parse(String(response.data.updated_at ?? ''));
     if (!Number.isFinite(updatedAtMs)) return null;
@@ -128,8 +179,10 @@ export async function loadPersistedUpstreamCache<T>(
       });
     }
 
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
     return payload;
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'upstream_cache_read_failed', {
       source,
       requestPath,
@@ -154,6 +207,7 @@ export async function savePersistedUpstreamCache(
   });
 
   if (!admin) return;
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) return;
 
   try {
     await withTimeout(
@@ -169,7 +223,9 @@ export async function savePersistedUpstreamCache(
       ),
       `save persisted upstream cache for ${cacheKey}`,
     );
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'upstream_cache_write_failed', {
       source,
       requestPath,
@@ -208,6 +264,7 @@ export async function saveSnapshotCacheRecord(input: {
   });
 
   if (!admin) return;
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) return;
 
   const generatedAtIso = toIsoString(input.generatedAt);
   const cacheKey = [input.source, input.eventKey ?? 'none', input.teamNumber ?? 'none'].join('::');
@@ -228,7 +285,9 @@ export async function saveSnapshotCacheRecord(input: {
       ),
       `save snapshot cache for ${cacheKey}`,
     );
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'snapshot_cache_write_failed', {
       source: input.source,
       eventKey: input.eventKey,
@@ -262,7 +321,11 @@ export async function loadSnapshotCacheRecord<T>(
         .maybeSingle(),
       `load snapshot cache for ${cacheKey}`,
     );
-    if (response.error || !response.data) return null;
+    if (response.error) {
+      markPersistenceFailure(SOURCE_CACHE_SCOPE);
+      return null;
+    }
+    if (!response.data) return null;
 
     const generatedAtMs = Date.parse(
       String(response.data.generated_at ?? response.data.updated_at ?? ''),
@@ -277,8 +340,10 @@ export async function loadSnapshotCacheRecord<T>(
         staleForSeconds: Math.max(maxAgeSeconds + 60, maxAgeSeconds * 3),
       });
     }
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
     return payload;
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'snapshot_cache_read_failed', {
       source,
       eventKey,
@@ -324,6 +389,15 @@ export async function appendEventLiveSignal(
     };
   }
 
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) {
+    return {
+      persisted: false,
+      status: 'disabled',
+      detail: 'Source persistence is temporarily bypassed after repeated failures.',
+      signalId: null,
+    };
+  }
+
   const dedupeKey = input.dedupeKey?.trim() ?? null;
   if (dedupeKey) {
     try {
@@ -338,6 +412,7 @@ export async function appendEventLiveSignal(
       );
 
       if (existing.error) {
+        markPersistenceFailure(SOURCE_CACHE_SCOPE);
         const detail = `Failed to query existing event live signal rows: ${existing.error.message}`;
         logPersistenceEvent('error', 'event_live_signal_query_failed', {
           eventKey: input.eventKey,
@@ -369,6 +444,7 @@ export async function appendEventLiveSignal(
           );
 
           if (updateResponse.error) {
+            markPersistenceFailure(SOURCE_CACHE_SCOPE);
             const detail = `Failed to update existing event live signal row: ${updateResponse.error.message}`;
             logPersistenceEvent('error', 'event_live_signal_update_failed', {
               eventKey: input.eventKey,
@@ -384,6 +460,26 @@ export async function appendEventLiveSignal(
             };
           }
 
+          const cachedSignals = await loadHotCacheJson<Record<string, unknown>[]>(
+            buildEventLiveSignalsHotCacheKey(input.eventKey),
+          );
+          if (Array.isArray(cachedSignals.value)) {
+            const nextSignals = cachedSignals.value.map((row) =>
+              readRowId(row.id) === existingSignalId
+                ? {
+                    ...row,
+                    title: input.title,
+                    body: input.body,
+                    payload: input.payload ?? {},
+                    dedupe_key: dedupeKey,
+                    updated_at: new Date().toISOString(),
+                  }
+                : row,
+            );
+            void primeEventLiveSignalsHotCache(input.eventKey, nextSignals);
+          }
+
+          markPersistenceSuccess(SOURCE_CACHE_SCOPE);
           return {
             persisted: true,
             status: 'updated',
@@ -391,6 +487,7 @@ export async function appendEventLiveSignal(
             signalId: existingSignalId,
           };
         } catch (error) {
+          markPersistenceFailure(SOURCE_CACHE_SCOPE);
           const detail =
             error instanceof Error ? error.message : 'Unknown event live signal update error';
           logPersistenceEvent('error', 'event_live_signal_update_failed', {
@@ -408,6 +505,7 @@ export async function appendEventLiveSignal(
         }
       }
     } catch (error) {
+      markPersistenceFailure(SOURCE_CACHE_SCOPE);
       const detail =
         error instanceof Error ? error.message : 'Unknown event live signal query error';
       logPersistenceEvent('error', 'event_live_signal_query_failed', {
@@ -446,6 +544,7 @@ export async function appendEventLiveSignal(
     );
 
     if (insertResponse.error) {
+      markPersistenceFailure(SOURCE_CACHE_SCOPE);
       const detail = `Failed to insert event live signal row: ${insertResponse.error.message}`;
       logPersistenceEvent('error', 'event_live_signal_insert_failed', {
         eventKey: input.eventKey,
@@ -465,6 +564,23 @@ export async function appendEventLiveSignal(
         ? insertResponse.data.id
         : null;
 
+    const cachedSignals = await loadHotCacheJson<Record<string, unknown>[]>(
+      buildEventLiveSignalsHotCacheKey(input.eventKey),
+    );
+    const nextSignalRow = createEventLiveSignalRow({
+      ...input,
+      workspaceKey,
+      id: insertedSignalId,
+    });
+    const nextSignals = Array.isArray(cachedSignals.value)
+      ? [
+          nextSignalRow,
+          ...cachedSignals.value.filter((row) => readRowId(row.id) !== insertedSignalId),
+        ].slice(0, 12)
+      : [nextSignalRow];
+    void primeEventLiveSignalsHotCache(input.eventKey, nextSignals);
+
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
     return {
       persisted: true,
       status: 'stored',
@@ -472,6 +588,7 @@ export async function appendEventLiveSignal(
       signalId: insertedSignalId,
     };
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     const detail =
       error instanceof Error ? error.message : 'Unknown event live signal insert error';
     logPersistenceEvent('error', 'event_live_signal_insert_failed', {
@@ -489,6 +606,12 @@ export async function appendEventLiveSignal(
 }
 
 export async function listEventLiveSignals(eventKey: string, limit = 12) {
+  const hotCacheKey = buildEventLiveSignalsHotCacheKey(eventKey);
+  const hotCacheValue = await loadHotCacheJson<Record<string, unknown>[]>(hotCacheKey);
+  if (Array.isArray(hotCacheValue.value) && !hotCacheValue.isStale) {
+    return hotCacheValue.value.slice(0, limit);
+  }
+
   const { client: admin, detail: adminDetail } = getAdminClient();
   if (!admin) {
     logPersistenceEvent('warn', 'event_live_signal_list_disabled', {
@@ -506,6 +629,10 @@ export async function listEventLiveSignals(eventKey: string, limit = 12) {
     return [];
   }
 
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) {
+    return Array.isArray(hotCacheValue.value) ? hotCacheValue.value.slice(0, limit) : [];
+  }
+
   try {
     const response = await withTimeout(
       admin
@@ -515,22 +642,36 @@ export async function listEventLiveSignals(eventKey: string, limit = 12) {
         .order('created_at', { ascending: false })
         .limit(limit),
       `list event live signals for ${workspaceKey}`,
+      EVENT_LIVE_SIGNALS_LIST_TIMEOUT_MS,
     );
 
     if (response.error) {
+      markPersistenceFailure(SOURCE_CACHE_SCOPE);
       logPersistenceEvent('error', 'event_live_signal_list_failed', {
         eventKey,
         detail: response.error.message,
       });
-      return [];
+      const fallbackRows = Array.isArray(hotCacheValue.value)
+        ? hotCacheValue.value.slice(0, limit)
+        : [];
+      void primeEventLiveSignalsHotCache(eventKey, fallbackRows);
+      return fallbackRows;
     }
-    return (response.data ?? []) as Record<string, unknown>[];
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
+    const rows = (response.data ?? []) as Record<string, unknown>[];
+    void primeEventLiveSignalsHotCache(eventKey, rows);
+    return rows;
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'event_live_signal_list_failed', {
       eventKey,
       detail: error instanceof Error ? error.message : 'Unknown event live signal list error',
     });
-    return [];
+    const fallbackRows = Array.isArray(hotCacheValue.value)
+      ? hotCacheValue.value.slice(0, limit)
+      : [];
+    void primeEventLiveSignalsHotCache(eventKey, fallbackRows);
+    return fallbackRows;
   }
 }
 
@@ -543,6 +684,7 @@ export async function saveValidationSnapshot(
 
   const workspaceKey = getEventWorkspaceKey(eventKey);
   if (!workspaceKey) return;
+  if (shouldBypassPersistence(SOURCE_CACHE_SCOPE)) return;
 
   try {
     await withTimeout(
@@ -557,7 +699,9 @@ export async function saveValidationSnapshot(
       ),
       `save validation snapshot for ${workspaceKey}`,
     );
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
   } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
     logPersistenceEvent('warn', 'validation_snapshot_write_failed', {
       eventKey,
       detail: error instanceof Error ? error.message : 'Unknown validation snapshot write error',

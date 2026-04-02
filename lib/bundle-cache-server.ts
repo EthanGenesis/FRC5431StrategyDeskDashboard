@@ -4,11 +4,18 @@ import {
   buildWarmBundleStatusHotCacheKey,
 } from './hot-cache-keys';
 import { loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
+import {
+  markPersistenceFailure,
+  markPersistenceSuccess,
+  shouldBypassPersistence,
+} from './persistence-circuit-breaker';
 import { PERSISTENCE_TABLES, SHARED_WORKSPACE_KEY } from './persistence-surfaces';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 
 const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
+const BUNDLE_CACHE_READ_SCOPE = 'bundle-cache-read';
+const BUNDLE_CACHE_WRITE_SCOPE = 'bundle-cache-write';
 
 export type WarmBundleState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -181,6 +188,15 @@ export async function loadWarmBundlePayloadRecord<T>(
       etag: null,
     };
   }
+  if (shouldBypassPersistence(BUNDLE_CACHE_READ_SCOPE)) {
+    return {
+      payload: null,
+      cacheLayer: 'none',
+      isStale: false,
+      generatedAt: null,
+      etag: null,
+    };
+  }
 
   const cacheKey = buildSnapshotCacheKey(bundleKey);
 
@@ -193,7 +209,17 @@ export async function loadWarmBundlePayloadRecord<T>(
     `load warm bundle payload for ${bundleKey}`,
   );
 
-  if (response.error || !response.data) {
+  if (response.error) {
+    markPersistenceFailure(BUNDLE_CACHE_READ_SCOPE);
+    return {
+      payload: null,
+      cacheLayer: 'none',
+      isStale: false,
+      generatedAt: null,
+      etag: null,
+    };
+  }
+  if (!response.data) {
     return {
       payload: null,
       cacheLayer: 'none',
@@ -215,6 +241,7 @@ export async function loadWarmBundlePayloadRecord<T>(
       etag: null,
     };
   }
+  markPersistenceSuccess(BUNDLE_CACHE_READ_SCOPE);
 
   const responseData = response.data as Record<string, unknown>;
   const payload = (responseData.payload ?? null) as T | null;
@@ -293,6 +320,9 @@ export async function saveWarmBundlePayload(input: {
   if (!admin) {
     return { bundleKey, generatedAt };
   }
+  if (shouldBypassPersistence(BUNDLE_CACHE_WRITE_SCOPE)) {
+    return { bundleKey, generatedAt };
+  }
 
   const snapshotResponse = await withTimeout(
     admin.from(PERSISTENCE_TABLES.snapshotCache).upsert(
@@ -311,6 +341,7 @@ export async function saveWarmBundlePayload(input: {
   );
 
   if (snapshotResponse.error) {
+    markPersistenceFailure(BUNDLE_CACHE_WRITE_SCOPE);
     throw new Error(snapshotResponse.error.message);
   }
 
@@ -335,8 +366,10 @@ export async function saveWarmBundlePayload(input: {
   );
 
   if (statusResponse.error && !isMissingBundleStatusStorageError(statusResponse.error.message)) {
+    markPersistenceFailure(BUNDLE_CACHE_WRITE_SCOPE);
     throw new Error(statusResponse.error.message);
   }
+  markPersistenceSuccess(BUNDLE_CACHE_WRITE_SCOPE);
 
   void saveHotCacheJson(buildWarmBundleStatusHotCacheKey(bundleKey), {
     bundleKey,
@@ -408,6 +441,7 @@ export async function saveWarmBundleStatus(input: {
   });
 
   if (!admin) return bundleKey;
+  if (shouldBypassPersistence(BUNDLE_CACHE_WRITE_SCOPE)) return bundleKey;
 
   const response = await withTimeout(
     admin.from(PERSISTENCE_TABLES.bundleStatus).upsert(
@@ -430,8 +464,10 @@ export async function saveWarmBundleStatus(input: {
   );
 
   if (response.error && !isMissingBundleStatusStorageError(response.error.message)) {
+    markPersistenceFailure(BUNDLE_CACHE_WRITE_SCOPE);
     throw new Error(response.error.message);
   }
+  markPersistenceSuccess(BUNDLE_CACHE_WRITE_SCOPE);
 
   return bundleKey;
 }
@@ -450,6 +486,7 @@ export async function listWarmBundleStatuses(
 
   const admin = getAdminClient();
   if (!admin) return [];
+  if (shouldBypassPersistence(BUNDLE_CACHE_READ_SCOPE)) return [];
 
   const response = await withTimeout(
     admin
@@ -464,6 +501,7 @@ export async function listWarmBundleStatuses(
     if (isMissingBundleStatusStorageError(response.error.message)) {
       return [];
     }
+    markPersistenceFailure(BUNDLE_CACHE_READ_SCOPE);
     throw new Error(response.error.message);
   }
 
@@ -474,6 +512,7 @@ export async function listWarmBundleStatuses(
     freshForSeconds: 10,
     staleForSeconds: 45,
   });
+  markPersistenceSuccess(BUNDLE_CACHE_READ_SCOPE);
   return rows;
 }
 
@@ -492,6 +531,7 @@ export async function loadWarmBundleStatus(
 
   const admin = getAdminClient();
   if (!admin) return null;
+  if (shouldBypassPersistence(BUNDLE_CACHE_READ_SCOPE)) return null;
 
   const response = await withTimeout(
     admin
@@ -506,6 +546,7 @@ export async function loadWarmBundleStatus(
     if (isMissingBundleStatusStorageError(response.error.message)) {
       return null;
     }
+    markPersistenceFailure(BUNDLE_CACHE_READ_SCOPE);
     return null;
   }
   if (!response.data) return null;
@@ -514,5 +555,6 @@ export async function loadWarmBundleStatus(
     freshForSeconds: 30,
     staleForSeconds: 120,
   });
+  markPersistenceSuccess(BUNDLE_CACHE_READ_SCOPE);
   return normalized;
 }

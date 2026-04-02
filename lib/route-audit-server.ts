@@ -1,8 +1,14 @@
 import { PERSISTENCE_TABLES, SHARED_WORKSPACE_KEY } from './persistence-surfaces';
+import {
+  markPersistenceFailure,
+  markPersistenceSuccess,
+  shouldBypassPersistence,
+} from './persistence-circuit-breaker';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
 
-const SUPABASE_OPERATION_TIMEOUT_MS = 1500;
+const SUPABASE_OPERATION_TIMEOUT_MS = 400;
+const ROUTE_AUDIT_SCOPE = 'route-audit';
 
 type ParityAuditStatus = 'match' | 'diff' | 'error' | 'skipped';
 
@@ -37,6 +43,10 @@ function isMissingAuditTableError(message: string | null | undefined): boolean {
   );
 }
 
+function isTimeoutErrorMessage(message: string | null | undefined): boolean {
+  return readString(message).toLowerCase().includes('timed out after');
+}
+
 async function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -65,6 +75,7 @@ export async function recordPerfSample(
     meta?: Record<string, unknown>;
   },
 ): Promise<void> {
+  if (shouldBypassPersistence(ROUTE_AUDIT_SCOPE)) return;
   const admin = getAdminClient();
   if (!admin) return;
 
@@ -85,14 +96,21 @@ export async function recordPerfSample(
       `record perf sample for ${context.routeKey}`,
     );
 
-    if (response.error && !isMissingAuditTableError(response.error.message)) {
-      console.warn('perf_sample_write_failed', response.error.message);
+    if (response.error) {
+      markPersistenceFailure(ROUTE_AUDIT_SCOPE);
+      if (!isMissingAuditTableError(response.error.message)) {
+        console.warn('perf_sample_write_failed', response.error.message);
+      }
+      return;
     }
+    markPersistenceSuccess(ROUTE_AUDIT_SCOPE);
   } catch (error) {
-    console.warn(
-      'perf_sample_write_failed',
-      error instanceof Error ? error.message : 'Unknown perf sample write error',
-    );
+    markPersistenceFailure(ROUTE_AUDIT_SCOPE);
+    const message = error instanceof Error ? error.message : 'Unknown perf sample write error';
+    if (isTimeoutErrorMessage(message)) {
+      return;
+    }
+    console.warn('perf_sample_write_failed', message);
   }
 }
 
@@ -102,6 +120,7 @@ export async function recordParityAudit(
     detail?: Record<string, unknown>;
   },
 ): Promise<void> {
+  if (shouldBypassPersistence(ROUTE_AUDIT_SCOPE)) return;
   const admin = getAdminClient();
   if (!admin) return;
 
@@ -120,13 +139,20 @@ export async function recordParityAudit(
       `record parity audit for ${context.routeKey}`,
     );
 
-    if (response.error && !isMissingAuditTableError(response.error.message)) {
-      console.warn('parity_audit_write_failed', response.error.message);
+    if (response.error) {
+      markPersistenceFailure(ROUTE_AUDIT_SCOPE);
+      if (!isMissingAuditTableError(response.error.message)) {
+        console.warn('parity_audit_write_failed', response.error.message);
+      }
+      return;
     }
+    markPersistenceSuccess(ROUTE_AUDIT_SCOPE);
   } catch (error) {
-    console.warn(
-      'parity_audit_write_failed',
-      error instanceof Error ? error.message : 'Unknown parity audit write error',
-    );
+    markPersistenceFailure(ROUTE_AUDIT_SCOPE);
+    const message = error instanceof Error ? error.message : 'Unknown parity audit write error';
+    if (isTimeoutErrorMessage(message)) {
+      return;
+    }
+    console.warn('parity_audit_write_failed', message);
   }
 }

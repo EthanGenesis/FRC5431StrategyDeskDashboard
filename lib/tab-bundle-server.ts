@@ -222,7 +222,7 @@ export async function resolveWarmBundle<T>(params: {
     variant: params.variant,
   };
 
-  await saveWarmBundleStatus({
+  void saveWarmBundleStatus({
     ...baseBundleStatus,
     state: 'loading',
     ...(params.meta != null ? { meta: params.meta } : {}),
@@ -240,7 +240,7 @@ export async function resolveWarmBundle<T>(params: {
       scenarioId: params.scenarioId,
     });
 
-    await saveWarmBundlePayload({
+    void saveWarmBundlePayload({
       bundleKey,
       workspaceKey: params.workspaceKey,
       source: params.source,
@@ -267,7 +267,7 @@ export async function resolveWarmBundle<T>(params: {
       payload,
     };
   } catch (error) {
-    await saveWarmBundleStatus({
+    void saveWarmBundleStatus({
       ...baseBundleStatus,
       state: 'error',
       error: error instanceof Error ? error.message : 'Unknown warm bundle error',
