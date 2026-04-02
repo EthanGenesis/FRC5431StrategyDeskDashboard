@@ -6,8 +6,10 @@ const sharedTargetServerMocks = vi.hoisted(() => ({
   saveHotCacheJson: vi.fn(),
   deleteHotCacheKey: vi.fn(),
   getPostgresServerClient: vi.fn(),
+  isSupabaseConfigured: vi.fn(),
   isSupabaseServiceConfigured: vi.fn(),
   createSupabaseAdminClient: vi.fn(),
+  createSupabasePublicClient: vi.fn(),
   markPersistenceFailure: vi.fn(),
   markPersistenceSuccess: vi.fn(),
   shouldBypassPersistence: vi.fn(),
@@ -27,11 +29,13 @@ vi.mock('./postgres-server', () => ({
 }));
 
 vi.mock('./supabase', () => ({
+  isSupabaseConfigured: sharedTargetServerMocks.isSupabaseConfigured,
   isSupabaseServiceConfigured: sharedTargetServerMocks.isSupabaseServiceConfigured,
 }));
 
 vi.mock('./supabase-server', () => ({
   createSupabaseAdminClient: sharedTargetServerMocks.createSupabaseAdminClient,
+  createSupabasePublicClient: sharedTargetServerMocks.createSupabasePublicClient,
 }));
 
 vi.mock('./persistence-circuit-breaker', () => ({
@@ -73,6 +77,7 @@ describe('saveSharedActiveTarget', () => {
     });
     sharedTargetServerMocks.deleteHotCacheKey.mockResolvedValue(undefined);
     sharedTargetServerMocks.getPostgresServerClient.mockReturnValue(null);
+    sharedTargetServerMocks.isSupabaseConfigured.mockReturnValue(true);
     sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(true);
     sharedTargetServerMocks.shouldBypassPersistence.mockReturnValue(false);
     sharedTargetServerMocks.upsert.mockResolvedValue({ error: null });
@@ -80,6 +85,9 @@ describe('saveSharedActiveTarget', () => {
       upsert: sharedTargetServerMocks.upsert,
     });
     sharedTargetServerMocks.createSupabaseAdminClient.mockReturnValue({
+      from: sharedTargetServerMocks.from,
+    });
+    sharedTargetServerMocks.createSupabasePublicClient.mockReturnValue({
       from: sharedTargetServerMocks.from,
     });
   });
@@ -193,5 +201,51 @@ describe('saveSharedActiveTarget', () => {
     ).rejects.toThrow('write failed');
 
     expect(sharedTargetServerMocks.saveHotCacheJson).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the public Supabase client when the service role client is unavailable', async () => {
+    sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(false);
+
+    const result = await saveSharedActiveTarget(
+      {
+        teamNumber: 5431,
+        eventKey: '2026txcle',
+        eventName: 'FIT District Space City @ League City Event #1',
+      },
+      {
+        baseTarget: EMPTY_SHARED_ACTIVE_TARGET,
+        requirePersistence: true,
+      },
+    );
+
+    expect(sharedTargetServerMocks.createSupabaseAdminClient).not.toHaveBeenCalled();
+    expect(sharedTargetServerMocks.createSupabasePublicClient).toHaveBeenCalled();
+    expect(sharedTargetServerMocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        team_number: 5431,
+        event_key: '2026txcle',
+      }),
+      { onConflict: 'workspace_key' },
+    );
+    expect(result.teamNumber).toBe(5431);
+    expect(result.eventKey).toBe('2026txcle');
+  });
+
+  it('throws when durable persistence is required and no persistent client is configured', async () => {
+    sharedTargetServerMocks.isSupabaseConfigured.mockReturnValue(false);
+    sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(false);
+
+    await expect(
+      saveSharedActiveTarget(
+        {
+          teamNumber: 5431,
+          eventKey: '2026txcle',
+        },
+        {
+          baseTarget: EMPTY_SHARED_ACTIVE_TARGET,
+          requirePersistence: true,
+        },
+      ),
+    ).rejects.toThrow('Shared active target persistence is unavailable.');
   });
 });

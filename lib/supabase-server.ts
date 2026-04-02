@@ -35,3 +35,13 @@ export function createSupabaseAdminClient() {
     },
   });
 }
+
+export function createSupabasePublicClient() {
+  const env = getSupabasePublicEnv();
+  return createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}

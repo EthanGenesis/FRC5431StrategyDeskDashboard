@@ -12,8 +12,8 @@ import {
 } from './persistence-circuit-breaker';
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { getPostgresServerClient } from './postgres-server';
-import { isSupabaseServiceConfigured } from './supabase';
-import { createSupabaseAdminClient } from './supabase-server';
+import { isSupabaseConfigured, isSupabaseServiceConfigured } from './supabase';
+import { createSupabaseAdminClient, createSupabasePublicClient } from './supabase-server';
 import {
   ACTIVE_TARGET_SEASON_YEAR,
   ACTIVE_TARGET_WORKSPACE_KEY,
@@ -41,6 +41,7 @@ const SHARED_TARGET_WRITE_SCOPE = 'shared-target-write';
 
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
 type PostgresClient = NonNullable<ReturnType<typeof getPostgresServerClient>>;
+type SharedTargetSupabaseClient = AdminClient;
 
 export type TeamEventCatalogResult = {
   generatedAt: string;
@@ -85,6 +86,11 @@ async function withTimeout<T>(
 function getAdminClient(): AdminClient | null {
   if (!isSupabaseServiceConfigured()) return null;
   return createSupabaseAdminClient();
+}
+
+function getPublicClient(): SharedTargetSupabaseClient | null {
+  if (!isSupabaseConfigured()) return null;
+  return createSupabasePublicClient();
 }
 
 function getPostgresClient(): PostgresClient | null {
@@ -170,11 +176,11 @@ function refreshStatusRowFromStatus(
 }
 
 async function loadPersistedSharedActiveTarget(
-  admin: AdminClient,
+  client: SharedTargetSupabaseClient,
   timeoutMs = SUPABASE_READ_TIMEOUT_MS,
 ): Promise<SharedActiveTarget | null> {
   const response = await withTimeout(
-    admin
+    client
       .from(PERSISTENCE_TABLES.activeTarget)
       .select('*')
       .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
@@ -284,7 +290,12 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
   }
 
   const admin = getAdminClient();
-  if (!admin) {
+  const publicClient = getPublicClient();
+  const supabaseClients = [admin, publicClient].filter(
+    (value): value is SharedTargetSupabaseClient => value != null,
+  );
+
+  if (!supabaseClients.length) {
     return hotCacheValue.value
       ? normalizeSharedActiveTarget(hotCacheValue.value)
       : EMPTY_SHARED_ACTIVE_TARGET;
@@ -295,41 +306,37 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
       : EMPTY_SHARED_ACTIVE_TARGET;
   }
 
-  try {
-    const response = await withTimeout(
-      admin
-        .from(PERSISTENCE_TABLES.activeTarget)
-        .select('*')
-        .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
-        .maybeSingle(),
-      'load shared active target',
-    );
+  for (const client of supabaseClients) {
+    try {
+      const response = await withTimeout(
+        client
+          .from(PERSISTENCE_TABLES.activeTarget)
+          .select('*')
+          .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
+          .maybeSingle(),
+        'load shared active target',
+      );
 
-    if (response.error) {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-      return hotCacheValue.value
-        ? normalizeSharedActiveTarget(hotCacheValue.value)
-        : EMPTY_SHARED_ACTIVE_TARGET;
-    }
-    if (!response.data) {
-      return hotCacheValue.value
-        ? normalizeSharedActiveTarget(hotCacheValue.value)
-        : EMPTY_SHARED_ACTIVE_TARGET;
-    }
+      if (response.error || !response.data) {
+        continue;
+      }
 
-    const normalized = normalizeSharedActiveTarget(response.data);
-    void saveHotCacheJson(hotCacheKey, normalized, {
-      freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
-      staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
-    });
-    markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
-    return normalized;
-  } catch {
-    markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-    return hotCacheValue.value
-      ? normalizeSharedActiveTarget(hotCacheValue.value)
-      : EMPTY_SHARED_ACTIVE_TARGET;
+      const normalized = normalizeSharedActiveTarget(response.data);
+      void saveHotCacheJson(hotCacheKey, normalized, {
+        freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
+        staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
+      });
+      markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
+      return normalized;
+    } catch {
+      // Fall through to the next client before giving up.
+    }
   }
+
+  markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+  return hotCacheValue.value
+    ? normalizeSharedActiveTarget(hotCacheValue.value)
+    : EMPTY_SHARED_ACTIVE_TARGET;
 }
 
 export type SaveSharedActiveTargetOptions = {
@@ -352,6 +359,7 @@ export async function saveSharedActiveTarget(
   });
   const postgres = getPostgresClient();
   const admin = getAdminClient();
+  const publicClient = getPublicClient();
   if (postgres) {
     try {
       const rows = await withWriteTimeout(
@@ -439,76 +447,84 @@ export async function saveSharedActiveTarget(
     }
   }
 
-  if (!admin) {
-    await saveSharedActiveTargetHotCache(next);
-    await invalidateBootstrapHotCache();
-    return next;
-  }
+  const supabaseClients = [admin, publicClient].filter(
+    (value): value is SharedTargetSupabaseClient => value != null,
+  );
+  let lastPersistenceError: string | null = null;
 
-  try {
-    const response = await withWriteTimeout(
-      () =>
-        admin
-          .from(PERSISTENCE_TABLES.activeTarget)
-          .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' }),
-      'save shared active target',
-      options.requirePersistence
-        ? DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS
-        : SUPABASE_WRITE_TIMEOUT_MS,
-    );
+  if (supabaseClients.length) {
+    for (const client of supabaseClients) {
+      try {
+        const response = await withWriteTimeout(
+          () =>
+            client
+              .from(PERSISTENCE_TABLES.activeTarget)
+              .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' }),
+          'save shared active target',
+          options.requirePersistence
+            ? DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS
+            : SUPABASE_WRITE_TIMEOUT_MS,
+        );
 
-    if (response.error) {
-      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
-      logSharedTargetPersistenceWarning(
-        'shared_active_target_write_failed',
-        response.error.message,
-      );
-      if (options.requirePersistence && errorLooksLikeTimeout(response.error.message)) {
-        const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
-        if (confirmed) {
-          markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
-          await saveSharedActiveTargetHotCache(confirmed);
-          await invalidateBootstrapHotCache();
-          return confirmed;
+        if (response.error) {
+          lastPersistenceError = response.error.message;
+          logSharedTargetPersistenceWarning(
+            'shared_active_target_write_failed',
+            response.error.message,
+          );
+          if (
+            options.requirePersistence &&
+            admin &&
+            client === admin &&
+            errorLooksLikeTimeout(response.error.message)
+          ) {
+            const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
+            if (confirmed) {
+              markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+              await saveSharedActiveTargetHotCache(confirmed);
+              await invalidateBootstrapHotCache();
+              return confirmed;
+            }
+          }
+          continue;
+        }
+
+        markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+        await saveSharedActiveTargetHotCache(next);
+        await invalidateBootstrapHotCache();
+        return next;
+      } catch (error) {
+        lastPersistenceError =
+          error instanceof Error ? error.message : 'Unknown shared active target write error';
+        logSharedTargetPersistenceWarning(
+          'shared_active_target_write_failed',
+          lastPersistenceError,
+        );
+        if (
+          options.requirePersistence &&
+          admin &&
+          client === admin &&
+          errorLooksLikeTimeout(error instanceof Error ? error.message : error)
+        ) {
+          const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
+          if (confirmed) {
+            markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+            await saveSharedActiveTargetHotCache(confirmed);
+            await invalidateBootstrapHotCache();
+            return confirmed;
+          }
         }
       }
-      if (options.requirePersistence) {
-        throw new Error(response.error.message);
-      }
-      await saveSharedActiveTargetHotCache(next);
-      await invalidateBootstrapHotCache();
-      return next;
     }
-
-    markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
-    await saveSharedActiveTargetHotCache(next);
-    await invalidateBootstrapHotCache();
-    return next;
-  } catch (error) {
-    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
-    logSharedTargetPersistenceWarning(
-      'shared_active_target_write_failed',
-      error instanceof Error ? error.message : 'Unknown shared active target write error',
-    );
-    if (
-      options.requirePersistence &&
-      errorLooksLikeTimeout(error instanceof Error ? error.message : error)
-    ) {
-      const confirmed = await confirmSharedActiveTargetPersistence(admin, next);
-      if (confirmed) {
-        markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
-        await saveSharedActiveTargetHotCache(confirmed);
-        await invalidateBootstrapHotCache();
-        return confirmed;
-      }
-    }
-    if (options.requirePersistence) {
-      throw error;
-    }
-    await saveSharedActiveTargetHotCache(next);
-    await invalidateBootstrapHotCache();
-    return next;
   }
+
+  markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+  if (options.requirePersistence) {
+    throw new Error(lastPersistenceError ?? 'Shared active target persistence is unavailable.');
+  }
+  await saveSharedActiveTargetHotCache(next);
+  await invalidateBootstrapHotCache();
+  return next;
 }
 
 export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
@@ -553,7 +569,12 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
   }
 
   const admin = getAdminClient();
-  if (!admin) {
+  const publicClient = getPublicClient();
+  const supabaseClients = [admin, publicClient].filter(
+    (value): value is SharedTargetSupabaseClient => value != null,
+  );
+
+  if (!supabaseClients.length) {
     return hotCacheValue.value
       ? normalizeSharedRefreshStatus(hotCacheValue.value)
       : EMPTY_SHARED_REFRESH_STATUS;
@@ -564,41 +585,37 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
       : EMPTY_SHARED_REFRESH_STATUS;
   }
 
-  try {
-    const response = await withTimeout(
-      admin
-        .from(PERSISTENCE_TABLES.refreshStatus)
-        .select('*')
-        .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
-        .maybeSingle(),
-      'load shared refresh status',
-    );
+  for (const client of supabaseClients) {
+    try {
+      const response = await withTimeout(
+        client
+          .from(PERSISTENCE_TABLES.refreshStatus)
+          .select('*')
+          .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
+          .maybeSingle(),
+        'load shared refresh status',
+      );
 
-    if (response.error) {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-      return hotCacheValue.value
-        ? normalizeSharedRefreshStatus(hotCacheValue.value)
-        : EMPTY_SHARED_REFRESH_STATUS;
-    }
-    if (!response.data) {
-      return hotCacheValue.value
-        ? normalizeSharedRefreshStatus(hotCacheValue.value)
-        : EMPTY_SHARED_REFRESH_STATUS;
-    }
+      if (response.error || !response.data) {
+        continue;
+      }
 
-    const normalized = normalizeSharedRefreshStatus(response.data);
-    void saveHotCacheJson(hotCacheKey, normalized, {
-      freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
-      staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
-    });
-    markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
-    return normalized;
-  } catch {
-    markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-    return hotCacheValue.value
-      ? normalizeSharedRefreshStatus(hotCacheValue.value)
-      : EMPTY_SHARED_REFRESH_STATUS;
+      const normalized = normalizeSharedRefreshStatus(response.data);
+      void saveHotCacheJson(hotCacheKey, normalized, {
+        freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
+        staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
+      });
+      markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
+      return normalized;
+    } catch {
+      // Fall through to the next client before giving up.
+    }
   }
+
+  markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
+  return hotCacheValue.value
+    ? normalizeSharedRefreshStatus(hotCacheValue.value)
+    : EMPTY_SHARED_REFRESH_STATUS;
 }
 
 export async function saveSharedRefreshStatus(
@@ -739,22 +756,32 @@ export async function loadTeamEventCatalog(
   }
 
   const admin = getAdminClient();
-  if (admin && !options.forceRefresh && !shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)) {
-    try {
-      const response = await withTimeout(
-        admin
-          .from(PERSISTENCE_TABLES.teamEventCatalog)
-          .select('payload, generated_at, updated_at')
-          .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
-          .eq('team_number', normalizedTeam)
-          .eq('season_year', year)
-          .maybeSingle(),
-        `load team event catalog for ${normalizedTeam}`,
-      );
+  const publicClient = getPublicClient();
+  const readClients = [admin, publicClient].filter(
+    (value): value is SharedTargetSupabaseClient => value != null,
+  );
+  if (
+    readClients.length &&
+    !options.forceRefresh &&
+    !shouldBypassPersistence(SHARED_TARGET_READ_SCOPE)
+  ) {
+    for (const client of readClients) {
+      try {
+        const response = await withTimeout(
+          client
+            .from(PERSISTENCE_TABLES.teamEventCatalog)
+            .select('payload, generated_at, updated_at')
+            .eq('workspace_key', ACTIVE_TARGET_WORKSPACE_KEY)
+            .eq('team_number', normalizedTeam)
+            .eq('season_year', year)
+            .maybeSingle(),
+          `load team event catalog for ${normalizedTeam}`,
+        );
 
-      if (response.error) {
-        markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
-      } else if (response.data) {
+        if (response.error || !response.data) {
+          continue;
+        }
+
         const generatedAt =
           readNullableString(response.data.generated_at) ??
           readNullableString(response.data.updated_at) ??
@@ -776,10 +803,11 @@ export async function loadTeamEventCatalog(
           markPersistenceSuccess(SHARED_TARGET_READ_SCOPE);
           return cachedResult;
         }
+      } catch {
+        // Fall through to the next client before giving up.
       }
-    } catch {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
     }
+    markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
   }
 
   const events = await fetchTeamEventCatalog(normalizedTeam, year);
