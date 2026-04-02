@@ -28,7 +28,7 @@ import {
 } from './shared-target';
 import { fetchTeamEventCatalog } from './team-event-catalog';
 
-const SUPABASE_READ_TIMEOUT_MS = 2500;
+const SUPABASE_READ_TIMEOUT_MS = 5000;
 const SUPABASE_WRITE_TIMEOUT_MS = 2000;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;

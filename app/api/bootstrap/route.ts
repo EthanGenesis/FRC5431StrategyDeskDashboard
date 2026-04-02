@@ -25,7 +25,7 @@ import { getEventWorkspaceKey } from '../../../lib/workspace-key';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BOOTSTRAP_ROUTE_TIMEOUT_MS = 800;
+const BOOTSTRAP_ROUTE_TIMEOUT_MS = 3500;
 
 type BootstrapResponse = {
   generatedAtMs: number;
