@@ -29,8 +29,7 @@ import {
 import { fetchTeamEventCatalog } from './team-event-catalog';
 
 const SUPABASE_READ_TIMEOUT_MS = 2500;
-const SUPABASE_WRITE_TIMEOUT_MS = 10000;
-const SUPABASE_WRITE_RETRY_DELAY_MS = 250;
+const SUPABASE_WRITE_TIMEOUT_MS = 2000;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;
 const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
@@ -83,28 +82,19 @@ function getAdminClient(): AdminClient | null {
   return createSupabaseAdminClient();
 }
 
-function isTimeoutErrorMessage(message: string | null | undefined): boolean {
-  return readString(message).toLowerCase().includes('timed out after');
+function logSharedTargetPersistenceWarning(event: string, detail: string): void {
+  console.warn(
+    JSON.stringify({
+      level: 'warn',
+      event,
+      ts: new Date().toISOString(),
+      detail,
+    }),
+  );
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function withWriteRetry<T>(operation: () => PromiseLike<T> | T, label: string): Promise<T> {
-  try {
-    return await withTimeout(Promise.resolve(operation()), label, SUPABASE_WRITE_TIMEOUT_MS);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!isTimeoutErrorMessage(message)) {
-      throw error;
-    }
-
-    await delay(SUPABASE_WRITE_RETRY_DELAY_MS);
-    return withTimeout(Promise.resolve(operation()), `${label} retry`, SUPABASE_WRITE_TIMEOUT_MS);
-  }
+async function withWriteTimeout<T>(operation: () => PromiseLike<T> | T, label: string): Promise<T> {
+  return withTimeout(Promise.resolve(operation()), label, SUPABASE_WRITE_TIMEOUT_MS);
 }
 
 function activeTargetRowFromTarget(
@@ -211,32 +201,42 @@ export async function saveSharedActiveTarget(
     workspaceKey: ACTIVE_TARGET_WORKSPACE_KEY,
     seasonYear: ACTIVE_TARGET_SEASON_YEAR,
   });
-  const admin = getAdminClient();
-  if (!admin) return next;
-
-  const response = await withWriteRetry(
-    () =>
-      admin
-        .from(PERSISTENCE_TABLES.activeTarget)
-        .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' })
-        .select('*')
-        .single(),
-    'save shared active target',
-  );
-
-  if (response.error) {
-    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
-    throw new Error(response.error.message);
-  }
-
-  const savedTarget = normalizeSharedActiveTarget(response.data);
-  await saveHotCacheJson(buildActiveTargetHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), savedTarget, {
+  await saveHotCacheJson(buildActiveTargetHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), next, {
     freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
   void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
-  markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
-  return savedTarget;
+  const admin = getAdminClient();
+  if (!admin) return next;
+
+  try {
+    const response = await withWriteTimeout(
+      () =>
+        admin
+          .from(PERSISTENCE_TABLES.activeTarget)
+          .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' }),
+      'save shared active target',
+    );
+
+    if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_active_target_write_failed',
+        response.error.message,
+      );
+      return next;
+    }
+
+    markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+    return next;
+  } catch (error) {
+    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+    logSharedTargetPersistenceWarning(
+      'shared_active_target_write_failed',
+      error instanceof Error ? error.message : 'Unknown shared active target write error',
+    );
+    return next;
+  }
 }
 
 export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
@@ -304,32 +304,42 @@ export async function saveSharedRefreshStatus(
     ...partial,
     workspaceKey: ACTIVE_TARGET_WORKSPACE_KEY,
   });
-  const admin = getAdminClient();
-  if (!admin) return next;
-
-  const response = await withWriteRetry(
-    () =>
-      admin
-        .from(PERSISTENCE_TABLES.refreshStatus)
-        .upsert(refreshStatusRowFromStatus(next), { onConflict: 'workspace_key' })
-        .select('*')
-        .single(),
-    'save shared refresh status',
-  );
-
-  if (response.error) {
-    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
-    throw new Error(response.error.message);
-  }
-
-  const savedStatus = normalizeSharedRefreshStatus(response.data);
-  await saveHotCacheJson(buildRefreshStatusHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), savedStatus, {
+  await saveHotCacheJson(buildRefreshStatusHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), next, {
     freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
   void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
-  markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
-  return savedStatus;
+  const admin = getAdminClient();
+  if (!admin) return next;
+
+  try {
+    const response = await withWriteTimeout(
+      () =>
+        admin
+          .from(PERSISTENCE_TABLES.refreshStatus)
+          .upsert(refreshStatusRowFromStatus(next), { onConflict: 'workspace_key' }),
+      'save shared refresh status',
+    );
+
+    if (response.error) {
+      markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+      logSharedTargetPersistenceWarning(
+        'shared_refresh_status_write_failed',
+        response.error.message,
+      );
+      return next;
+    }
+
+    markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+    return next;
+  } catch (error) {
+    markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
+    logSharedTargetPersistenceWarning(
+      'shared_refresh_status_write_failed',
+      error instanceof Error ? error.message : 'Unknown shared refresh status write error',
+    );
+    return next;
+  }
 }
 
 export async function loadTeamEventCatalog(
@@ -413,7 +423,7 @@ export async function loadTeamEventCatalog(
 
   if (admin) {
     try {
-      const response = await withWriteRetry(
+      const response = await withWriteTimeout(
         () =>
           admin.from(PERSISTENCE_TABLES.teamEventCatalog).upsert(
             {

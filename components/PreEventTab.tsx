@@ -1,19 +1,10 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { cloneElement, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ReactElement } from 'react';
 import { fetchJsonOrThrow } from '../lib/httpCache';
 import type { PreEventScoutResponse } from '../lib/strategy-types';
 import type { CompareTeamEventRow, MatchSimple } from '../lib/types';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatMatchLabel, safeNumber, tbaTeamKey } from '../lib/logic';
 import DisclosureSection from './ui/DisclosureSection';
 
@@ -78,6 +69,51 @@ function fmt(value: unknown, digits = 1): string {
 function pct(value: unknown): string {
   if (value == null || !Number.isFinite(Number(value))) return '-';
   return `${Math.round(Number(value) * 100)}%`;
+}
+
+function MeasuredResponsiveChart({
+  children,
+  height,
+}: {
+  children: ReactElement;
+  height: number;
+}): ReactElement {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const element = shellRef.current;
+    if (!element) return undefined;
+
+    const update = () => {
+      setChartSize({
+        width: element.clientWidth > 1 ? element.clientWidth : 0,
+        height: element.clientHeight > 1 ? element.clientHeight : 0,
+      });
+    };
+
+    update();
+
+    const observer = new ResizeObserver(() => {
+      update();
+    });
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <div ref={shellRef} style={{ width: '100%', height }}>
+      {chartSize.width > 1 && chartSize.height > 1
+        ? cloneElement(children as ReactElement<{ width: number; height: number }>, {
+            width: chartSize.width,
+            height: chartSize.height,
+          })
+        : null}
+    </div>
+  );
 }
 function safeValue(value: unknown): number | null {
   const parsed = Number(value);
@@ -544,37 +580,33 @@ export default function PreEventTab({
           <div className="grid-2">
             <div className="panel" style={{ padding: 16 }}>
               <div style={{ fontWeight: 900, marginBottom: 10 }}>Historical Leaderboard Chart</div>
-              <div style={{ width: '100%', height: 320 }}>
-                <ResponsiveContainer>
-                  <BarChart data={historicalChartRows}>
-                    <CartesianGrid strokeDasharray="4 4" stroke="#223048" />
-                    <XAxis dataKey="label" stroke="#b7c2d6" />
-                    <YAxis stroke="#b7c2d6" />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="value" fill="#4bb3fd" name={sortMode} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <MeasuredResponsiveChart height={320}>
+                <BarChart data={historicalChartRows}>
+                  <CartesianGrid strokeDasharray="4 4" stroke="#223048" />
+                  <XAxis dataKey="label" stroke="#b7c2d6" />
+                  <YAxis stroke="#b7c2d6" />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="value" fill="#4bb3fd" name={sortMode} />
+                </BarChart>
+              </MeasuredResponsiveChart>
             </div>
             <div className="panel" style={{ padding: 16 }}>
               <div style={{ fontWeight: 900, marginBottom: 10 }}>
                 Historical Breakdown Distribution
               </div>
-              <div style={{ width: '100%', height: 320 }}>
-                <ResponsiveContainer>
-                  <BarChart data={historicalBreakdownRows}>
-                    <CartesianGrid strokeDasharray="4 4" stroke="#223048" />
-                    <XAxis dataKey="label" stroke="#b7c2d6" />
-                    <YAxis stroke="#b7c2d6" />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="auto" stackId="a" fill="#ff7a59" name="Auto" />
-                    <Bar dataKey="teleop" stackId="a" fill="#38bdf8" name="Teleop" />
-                    <Bar dataKey="endgame" stackId="a" fill="#a3e635" name="Endgame" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <MeasuredResponsiveChart height={320}>
+                <BarChart data={historicalBreakdownRows}>
+                  <CartesianGrid strokeDasharray="4 4" stroke="#223048" />
+                  <XAxis dataKey="label" stroke="#b7c2d6" />
+                  <YAxis stroke="#b7c2d6" />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="auto" stackId="a" fill="#ff7a59" name="Auto" />
+                  <Bar dataKey="teleop" stackId="a" fill="#38bdf8" name="Teleop" />
+                  <Bar dataKey="endgame" stackId="a" fill="#a3e635" name="Endgame" />
+                </BarChart>
+              </MeasuredResponsiveChart>
             </div>
           </div>
         </DisclosureSection>

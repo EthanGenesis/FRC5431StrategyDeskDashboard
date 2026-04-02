@@ -1,6 +1,13 @@
 'use client';
 
-import type { ReactElement, ReactNode } from 'react';
+import {
+  cloneElement,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import {
   Area,
   AreaChart,
@@ -12,7 +19,6 @@ import {
   Line,
   LineChart,
   ReferenceLine,
-  ResponsiveContainer,
   Scatter,
   ScatterChart,
   Tooltip,
@@ -54,6 +60,31 @@ export default function AnalyticsChartBlock({
   referenceValue = null,
 }: AnalyticsChartBlockProps) {
   const { t } = useDashboardPreferences();
+  const chartShellRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const element = chartShellRef.current;
+    if (!element) return undefined;
+
+    const updateSize = () => {
+      setChartSize({
+        width: element.clientWidth > 1 ? element.clientWidth : 0,
+        height: element.clientHeight > 1 ? element.clientHeight : 0,
+      });
+    };
+
+    updateSize();
+
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   if (!data?.length || !series?.length) {
     return (
@@ -280,10 +311,17 @@ export default function AnalyticsChartBlock({
           {description ? <div className="analytics-block-description">{description}</div> : null}
         </div>
       </div>
-      <div className="analytics-chart-shell" style={{ height, minWidth: 0, minHeight: height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          {renderChart()}
-        </ResponsiveContainer>
+      <div
+        ref={chartShellRef}
+        className="analytics-chart-shell"
+        style={{ height, minWidth: 0, minHeight: height }}
+      >
+        {chartSize.width > 1 && chartSize.height > 1
+          ? cloneElement(renderChart() as ReactElement<{ width: number; height: number }>, {
+              width: chartSize.width,
+              height: chartSize.height,
+            })
+          : null}
       </div>
     </div>
   );
