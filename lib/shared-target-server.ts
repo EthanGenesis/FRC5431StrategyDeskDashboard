@@ -29,7 +29,8 @@ import {
 import { fetchTeamEventCatalog } from './team-event-catalog';
 
 const SUPABASE_READ_TIMEOUT_MS = 5000;
-const SUPABASE_WRITE_TIMEOUT_MS = 2000;
+const SUPABASE_WRITE_TIMEOUT_MS = 5000;
+const DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS = 12000;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;
 const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
@@ -93,8 +94,23 @@ function logSharedTargetPersistenceWarning(event: string, detail: string): void 
   );
 }
 
-async function withWriteTimeout<T>(operation: () => PromiseLike<T> | T, label: string): Promise<T> {
-  return withTimeout(Promise.resolve(operation()), label, SUPABASE_WRITE_TIMEOUT_MS);
+async function withWriteTimeout<T>(
+  operation: () => PromiseLike<T> | T,
+  label: string,
+  timeoutMs = SUPABASE_WRITE_TIMEOUT_MS,
+): Promise<T> {
+  return withTimeout(Promise.resolve(operation()), label, timeoutMs);
+}
+
+async function saveSharedActiveTargetHotCache(target: SharedActiveTarget): Promise<void> {
+  await saveHotCacheJson(buildActiveTargetHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), target, {
+    freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
+    staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
+  });
+}
+
+async function invalidateBootstrapHotCache(): Promise<void> {
+  await deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
 }
 
 function activeTargetRowFromTarget(
@@ -191,23 +207,30 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
   }
 }
 
+export type SaveSharedActiveTargetOptions = {
+  baseTarget?: SharedActiveTarget;
+  requirePersistence?: boolean;
+};
+
 export async function saveSharedActiveTarget(
   partial: Partial<SharedActiveTarget>,
+  options: SaveSharedActiveTargetOptions = {},
 ): Promise<SharedActiveTarget> {
-  const current = await loadSharedActiveTarget();
+  const current = options.baseTarget
+    ? normalizeSharedActiveTarget(options.baseTarget)
+    : await loadSharedActiveTarget();
   const next = normalizeSharedActiveTarget({
     ...current,
     ...partial,
     workspaceKey: ACTIVE_TARGET_WORKSPACE_KEY,
     seasonYear: ACTIVE_TARGET_SEASON_YEAR,
   });
-  await saveHotCacheJson(buildActiveTargetHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY), next, {
-    freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
-    staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
-  });
-  void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
   const admin = getAdminClient();
-  if (!admin) return next;
+  if (!admin) {
+    await saveSharedActiveTargetHotCache(next);
+    await invalidateBootstrapHotCache();
+    return next;
+  }
 
   try {
     const response = await withWriteTimeout(
@@ -216,6 +239,9 @@ export async function saveSharedActiveTarget(
           .from(PERSISTENCE_TABLES.activeTarget)
           .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' }),
       'save shared active target',
+      options.requirePersistence
+        ? DURABLE_SHARED_TARGET_WRITE_TIMEOUT_MS
+        : SUPABASE_WRITE_TIMEOUT_MS,
     );
 
     if (response.error) {
@@ -224,10 +250,17 @@ export async function saveSharedActiveTarget(
         'shared_active_target_write_failed',
         response.error.message,
       );
+      if (options.requirePersistence) {
+        throw new Error(response.error.message);
+      }
+      await saveSharedActiveTargetHotCache(next);
+      await invalidateBootstrapHotCache();
       return next;
     }
 
     markPersistenceSuccess(SHARED_TARGET_WRITE_SCOPE);
+    await saveSharedActiveTargetHotCache(next);
+    await invalidateBootstrapHotCache();
     return next;
   } catch (error) {
     markPersistenceFailure(SHARED_TARGET_WRITE_SCOPE);
@@ -235,6 +268,11 @@ export async function saveSharedActiveTarget(
       'shared_active_target_write_failed',
       error instanceof Error ? error.message : 'Unknown shared active target write error',
     );
+    if (options.requirePersistence) {
+      throw error;
+    }
+    await saveSharedActiveTargetHotCache(next);
+    await invalidateBootstrapHotCache();
     return next;
   }
 }
@@ -308,7 +346,7 @@ export async function saveSharedRefreshStatus(
     freshForSeconds: ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS,
     staleForSeconds: ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS,
   });
-  void deleteHotCacheKey(buildBootstrapHotCacheKey(ACTIVE_TARGET_WORKSPACE_KEY));
+  await invalidateBootstrapHotCache();
   const admin = getAdminClient();
   if (!admin) return next;
 

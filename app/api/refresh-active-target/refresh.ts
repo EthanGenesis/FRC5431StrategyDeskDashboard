@@ -207,10 +207,15 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
     lastError: null,
     detail: { teamNumber: target.teamNumber, eventKey: target.eventKey },
   });
-  await saveSharedActiveTarget({
-    refreshState: 'loading',
-    refreshError: null,
-  });
+  await saveSharedActiveTarget(
+    {
+      refreshState: 'loading',
+      refreshError: null,
+    },
+    {
+      baseTarget: target,
+    },
+  );
 
   const teamCatalogResult = await loadTeamEventCatalog(target.teamNumber ?? 0, {
     year: target.seasonYear,
@@ -418,16 +423,21 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
     .map(([name, state]) => `${name}: ${state.error}`)
     .join('; ');
   const completedAt = new Date().toISOString();
-  const nextTarget = await saveSharedActiveTarget({
-    lastSnapshotGeneratedAt:
-      toIsoString(components.snapshot?.generatedAtMs) ?? target.lastSnapshotGeneratedAt,
-    lastEventContextGeneratedAt:
-      toIsoString(components.event_context?.generatedAtMs) ?? target.lastEventContextGeneratedAt,
-    lastTeamCatalogGeneratedAt: teamCatalogResult.generatedAt,
-    lastRefreshedAt: completedAt,
-    refreshState: failedComponents.length ? 'error' : 'ready',
-    refreshError: refreshError || null,
-  });
+  const nextTarget = await saveSharedActiveTarget(
+    {
+      lastSnapshotGeneratedAt:
+        toIsoString(components.snapshot?.generatedAtMs) ?? target.lastSnapshotGeneratedAt,
+      lastEventContextGeneratedAt:
+        toIsoString(components.event_context?.generatedAtMs) ?? target.lastEventContextGeneratedAt,
+      lastTeamCatalogGeneratedAt: teamCatalogResult.generatedAt,
+      lastRefreshedAt: completedAt,
+      refreshState: failedComponents.length ? 'error' : 'ready',
+      refreshError: refreshError || null,
+    },
+    {
+      baseTarget: target,
+    },
+  );
   const nextStatus = await saveSharedRefreshStatus({
     state: failedComponents.length ? 'error' : 'ready',
     lastRunAt: startedAt,

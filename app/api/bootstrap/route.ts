@@ -68,11 +68,10 @@ export async function GET(
   }
 
   try {
+    const bootstrapStatePromise = readWarmBootstrapState();
     const [target, refreshStatus] = await Promise.all([
       Promise.race([
-        readWarmBootstrapState()
-          .then((value) => value.target)
-          .catch(() => EMPTY_SHARED_ACTIVE_TARGET),
+        bootstrapStatePromise.then((value) => value.target).catch(() => EMPTY_SHARED_ACTIVE_TARGET),
         new Promise<typeof EMPTY_SHARED_ACTIVE_TARGET>((resolve) => {
           setTimeout(() => {
             resolve(EMPTY_SHARED_ACTIVE_TARGET);
@@ -80,7 +79,7 @@ export async function GET(
         }),
       ]),
       Promise.race([
-        readWarmBootstrapState()
+        bootstrapStatePromise
           .then((value) => value.refreshStatus)
           .catch(() => EMPTY_SHARED_REFRESH_STATUS),
         new Promise<typeof EMPTY_SHARED_REFRESH_STATUS>((resolve) => {

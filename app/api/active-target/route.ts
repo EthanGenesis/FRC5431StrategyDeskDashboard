@@ -5,6 +5,7 @@ import {
   queueHotDataPlaneParityCheck,
 } from '../../../lib/hot-plane-server';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
+import { EMPTY_SHARED_ACTIVE_TARGET } from '../../../lib/shared-target';
 import {
   loadSharedActiveTarget,
   loadSharedRefreshStatus,
@@ -73,27 +74,37 @@ export async function POST(
     const teamNumber = Number(body.teamNumber ?? body.team_number);
     const normalizedTeam =
       Number.isFinite(teamNumber) && teamNumber > 0 ? Math.floor(teamNumber) : null;
-    const nextTarget = await saveSharedActiveTarget({
-      teamNumber: normalizedTeam,
-      eventKey: readString(body.eventKey ?? body.event_key),
-      eventName: readString(body.eventName ?? body.event_name),
-      eventShortName: readString(body.eventShortName ?? body.event_short_name),
-      eventLocation: readString(body.eventLocation ?? body.event_location),
-      startDate:
-        typeof body.startDate === 'string'
-          ? body.startDate.trim() || null
-          : typeof body.start_date === 'string'
-            ? body.start_date.trim() || null
-            : null,
-      endDate:
-        typeof body.endDate === 'string'
-          ? body.endDate.trim() || null
-          : typeof body.end_date === 'string'
-            ? body.end_date.trim() || null
-            : null,
-      refreshState: 'idle',
-      refreshError: null,
-    });
+    const nextTarget = await saveSharedActiveTarget(
+      {
+        teamNumber: normalizedTeam,
+        eventKey: readString(body.eventKey ?? body.event_key),
+        eventName: readString(body.eventName ?? body.event_name),
+        eventShortName: readString(body.eventShortName ?? body.event_short_name),
+        eventLocation: readString(body.eventLocation ?? body.event_location),
+        startDate:
+          typeof body.startDate === 'string'
+            ? body.startDate.trim() || null
+            : typeof body.start_date === 'string'
+              ? body.start_date.trim() || null
+              : null,
+        endDate:
+          typeof body.endDate === 'string'
+            ? body.endDate.trim() || null
+            : typeof body.end_date === 'string'
+              ? body.end_date.trim() || null
+              : null,
+        lastSnapshotGeneratedAt: null,
+        lastEventContextGeneratedAt: null,
+        lastTeamCatalogGeneratedAt: null,
+        lastRefreshedAt: null,
+        refreshState: 'idle',
+        refreshError: null,
+      },
+      {
+        baseTarget: EMPTY_SHARED_ACTIVE_TARGET,
+        requirePersistence: true,
+      },
+    );
 
     const refreshStatus = await loadSharedRefreshStatus();
     const responseBody = {

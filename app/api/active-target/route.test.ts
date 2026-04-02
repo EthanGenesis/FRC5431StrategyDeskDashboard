@@ -97,16 +97,31 @@ describe('/api/active-target', () => {
     const body = (await response.json()) as {
       target: { eventKey: string; eventName: string };
     };
+    const saveActiveTargetCalls = sharedTargetServerMocks.saveSharedActiveTarget.mock.calls as [
+      Record<string, unknown>,
+      {
+        requirePersistence?: boolean;
+        baseTarget?: { eventKey?: string; teamNumber?: number | null };
+      },
+    ][];
+    const [savedTargetPatch, savedTargetOptions] = saveActiveTargetCalls.at(-1) ?? [];
 
     expect(response.status).toBe(200);
-    expect(sharedTargetServerMocks.saveSharedActiveTarget).toHaveBeenCalledWith(
+    expect(savedTargetPatch).toEqual(
       expect.objectContaining({
         teamNumber: 5431,
         eventKey: '2026txwac',
         eventName: 'Waco District Event',
         eventShortName: 'Waco',
+        lastSnapshotGeneratedAt: null,
+        lastEventContextGeneratedAt: null,
+        lastTeamCatalogGeneratedAt: null,
+        lastRefreshedAt: null,
       }),
     );
+    expect(savedTargetOptions?.requirePersistence).toBe(true);
+    expect(savedTargetOptions?.baseTarget?.eventKey).toBe('');
+    expect(savedTargetOptions?.baseTarget?.teamNumber).toBeNull();
     expect(body.target.eventKey).toBe('2026txwac');
     expect(body.target.eventName).toBe('Waco District Event');
   });
