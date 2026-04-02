@@ -176,19 +176,10 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
   const startedAt = new Date().toISOString();
 
   if (!sharedTargetHasSelection(target)) {
-    const nextStatus = await saveSharedRefreshStatus({
-      state: 'idle',
-      lastRunAt: startedAt,
-      detail: { reason: 'No shared active target selected.' },
-    });
-    const nextTarget = await saveSharedActiveTarget({
-      refreshState: 'idle',
-      refreshError: null,
-    });
     return {
       ok: false,
-      target: nextTarget,
-      refreshStatus: nextStatus,
+      target,
+      refreshStatus: currentStatus,
       components: {},
     };
   }

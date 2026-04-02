@@ -28,7 +28,9 @@ import {
 } from './shared-target';
 import { fetchTeamEventCatalog } from './team-event-catalog';
 
-const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
+const SUPABASE_READ_TIMEOUT_MS = 2500;
+const SUPABASE_WRITE_TIMEOUT_MS = 10000;
+const SUPABASE_WRITE_RETRY_DELAY_MS = 250;
 const ACTIVE_TARGET_HOT_CACHE_FRESH_SECONDS = 5;
 const ACTIVE_TARGET_HOT_CACHE_STALE_SECONDS = 30;
 const SHARED_TARGET_READ_SCOPE = 'shared-target-read';
@@ -57,12 +59,16 @@ function readPositiveInteger(value: unknown): number | null {
   return parsed;
 }
 
-async function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: PromiseLike<T>,
+  label: string,
+  timeoutMs = SUPABASE_READ_TIMEOUT_MS,
+): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${SUPABASE_OPERATION_TIMEOUT_MS}ms`));
-    }, SUPABASE_OPERATION_TIMEOUT_MS);
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
 
   try {
@@ -75,6 +81,37 @@ async function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T
 function getAdminClient(): AdminClient | null {
   if (!isSupabaseServiceConfigured()) return null;
   return createSupabaseAdminClient();
+}
+
+function isTimeoutErrorMessage(message: string | null | undefined): boolean {
+  return readString(message).toLowerCase().includes('timed out after');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withWriteRetry<T>(
+  operation: () => PromiseLike<T> | T,
+  label: string,
+): Promise<T> {
+  try {
+    return await withTimeout(Promise.resolve(operation()), label, SUPABASE_WRITE_TIMEOUT_MS);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (!isTimeoutErrorMessage(message)) {
+      throw error;
+    }
+
+    await delay(SUPABASE_WRITE_RETRY_DELAY_MS);
+    return withTimeout(
+      Promise.resolve(operation()),
+      `${label} retry`,
+      SUPABASE_WRITE_TIMEOUT_MS,
+    );
+  }
 }
 
 function activeTargetRowFromTarget(
@@ -184,12 +221,13 @@ export async function saveSharedActiveTarget(
   const admin = getAdminClient();
   if (!admin) return next;
 
-  const response = await withTimeout(
-    admin
-      .from(PERSISTENCE_TABLES.activeTarget)
-      .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' })
-      .select('*')
-      .single(),
+  const response = await withWriteRetry(
+    () =>
+      admin
+        .from(PERSISTENCE_TABLES.activeTarget)
+        .upsert(activeTargetRowFromTarget(next), { onConflict: 'workspace_key' })
+        .select('*')
+        .single(),
     'save shared active target',
   );
 
@@ -276,12 +314,13 @@ export async function saveSharedRefreshStatus(
   const admin = getAdminClient();
   if (!admin) return next;
 
-  const response = await withTimeout(
-    admin
-      .from(PERSISTENCE_TABLES.refreshStatus)
-      .upsert(refreshStatusRowFromStatus(next), { onConflict: 'workspace_key' })
-      .select('*')
-      .single(),
+  const response = await withWriteRetry(
+    () =>
+      admin
+        .from(PERSISTENCE_TABLES.refreshStatus)
+        .upsert(refreshStatusRowFromStatus(next), { onConflict: 'workspace_key' })
+        .select('*')
+        .single(),
     'save shared refresh status',
   );
 
@@ -376,18 +415,19 @@ export async function loadTeamEventCatalog(
   const generatedAt = new Date().toISOString();
 
   if (admin) {
-    const response = await withTimeout(
-      admin.from(PERSISTENCE_TABLES.teamEventCatalog).upsert(
-        {
-          workspace_key: ACTIVE_TARGET_WORKSPACE_KEY,
-          team_number: normalizedTeam,
-          season_year: year,
-          payload: events,
-          generated_at: generatedAt,
-          updated_at: generatedAt,
-        },
-        { onConflict: 'workspace_key,team_number,season_year' },
-      ),
+    const response = await withWriteRetry(
+      () =>
+        admin.from(PERSISTENCE_TABLES.teamEventCatalog).upsert(
+          {
+            workspace_key: ACTIVE_TARGET_WORKSPACE_KEY,
+            team_number: normalizedTeam,
+            season_year: year,
+            payload: events,
+            generated_at: generatedAt,
+            updated_at: generatedAt,
+          },
+          { onConflict: 'workspace_key,team_number,season_year' },
+        ),
       `save team event catalog for ${normalizedTeam}`,
     );
     if (response.error) {
