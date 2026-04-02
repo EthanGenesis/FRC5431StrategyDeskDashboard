@@ -68,21 +68,28 @@ export async function GET(
   }
 
   try {
-    const { target, refreshStatus }: Awaited<ReturnType<typeof readWarmBootstrapState>> =
-      await Promise.race([
-        readWarmBootstrapState().catch(() => ({
-          target: EMPTY_SHARED_ACTIVE_TARGET,
-          refreshStatus: EMPTY_SHARED_REFRESH_STATUS,
-        })),
-        new Promise<Awaited<ReturnType<typeof readWarmBootstrapState>>>((resolve) => {
+    const [target, refreshStatus] = await Promise.all([
+      Promise.race([
+        readWarmBootstrapState()
+          .then((value) => value.target)
+          .catch(() => EMPTY_SHARED_ACTIVE_TARGET),
+        new Promise<typeof EMPTY_SHARED_ACTIVE_TARGET>((resolve) => {
           setTimeout(() => {
-            resolve({
-              target: EMPTY_SHARED_ACTIVE_TARGET,
-              refreshStatus: EMPTY_SHARED_REFRESH_STATUS,
-            });
+            resolve(EMPTY_SHARED_ACTIVE_TARGET);
           }, BOOTSTRAP_ROUTE_TIMEOUT_MS);
         }),
-      ]);
+      ]),
+      Promise.race([
+        readWarmBootstrapState()
+          .then((value) => value.refreshStatus)
+          .catch(() => EMPTY_SHARED_REFRESH_STATUS),
+        new Promise<typeof EMPTY_SHARED_REFRESH_STATUS>((resolve) => {
+          setTimeout(() => {
+            resolve(EMPTY_SHARED_REFRESH_STATUS);
+          }, BOOTSTRAP_ROUTE_TIMEOUT_MS);
+        }),
+      ]),
+    ]);
 
     if (!sharedTargetHasSelection(target)) {
       const body = {

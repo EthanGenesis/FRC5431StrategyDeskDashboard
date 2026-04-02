@@ -78,6 +78,15 @@ function readTimestamp(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+function isSkippableRefreshFailure(name: string, errorText: string): boolean {
+  const normalizedName = readString(name).toLowerCase();
+  const normalizedError = readString(errorText).toLowerCase();
+  if (!normalizedName.startsWith('compare_')) {
+    return false;
+  }
+  return normalizedError.includes('no compare teams are configured');
+}
+
 async function invokeRoute(
   name: string,
   handler: (req: Request) => Promise<Response>,
@@ -91,6 +100,14 @@ async function invokeRoute(
         isRecord(json) && typeof json.error === 'string'
           ? json.error
           : `${name} failed (${response.status})`;
+      if (isSkippableRefreshFailure(name, errorText)) {
+        return {
+          ok: true,
+          status: response.status,
+          error: null,
+          generatedAtMs: null,
+        };
+      }
       return {
         ok: false,
         status: response.status,
