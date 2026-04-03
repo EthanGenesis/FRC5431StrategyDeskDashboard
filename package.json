@@ -35,7 +35,7 @@
     "@vercel/speed-insights": "^2.0.0",
     "cheerio": "^1.1.2",
     "next": "16.2.1",
-    "postgres": "^3.4.7",
+    "postgres": "^3.4.8",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "recharts": "^3.8.1",
