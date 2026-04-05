@@ -281,7 +281,6 @@ export async function loadSharedActiveTarget(): Promise<SharedActiveTarget> {
         return persisted;
       }
     } catch (error) {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
       logSharedTargetPersistenceWarning(
         'shared_active_target_read_failed',
         error instanceof Error ? error.message : 'Unknown shared active target read error',
@@ -560,7 +559,6 @@ export async function loadSharedRefreshStatus(): Promise<SharedRefreshStatus> {
         return normalized;
       }
     } catch (error) {
-      markPersistenceFailure(SHARED_TARGET_READ_SCOPE);
       logSharedTargetPersistenceWarning(
         'shared_refresh_status_read_failed',
         error instanceof Error ? error.message : 'Unknown shared refresh status read error',

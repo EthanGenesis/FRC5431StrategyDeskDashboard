@@ -50,7 +50,11 @@ vi.mock('./team-event-catalog', () => ({
 
 import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { EMPTY_SHARED_ACTIVE_TARGET } from './shared-target';
-import { saveSharedActiveTarget } from './shared-target-server';
+import {
+  loadSharedActiveTarget,
+  loadSharedRefreshStatus,
+  saveSharedActiveTarget,
+} from './shared-target-server';
 
 describe('saveSharedActiveTarget', () => {
   beforeEach(() => {
@@ -247,5 +251,117 @@ describe('saveSharedActiveTarget', () => {
         },
       ),
     ).rejects.toThrow('Shared active target persistence is unavailable.');
+  });
+});
+
+describe('shared target read fallbacks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sharedTargetServerMocks.loadHotCacheJson.mockResolvedValue({
+      value: null,
+      layer: null,
+      isStale: false,
+      etag: null,
+      savedAt: null,
+      freshUntil: null,
+      staleUntil: null,
+      meta: {},
+    });
+    sharedTargetServerMocks.saveHotCacheJson.mockResolvedValue({
+      value: null,
+      layer: 'memory',
+      isStale: false,
+      etag: 'etag',
+      savedAt: null,
+      freshUntil: null,
+      staleUntil: null,
+      meta: {},
+    });
+    sharedTargetServerMocks.deleteHotCacheKey.mockResolvedValue(undefined);
+    sharedTargetServerMocks.shouldBypassPersistence.mockReturnValue(false);
+    sharedTargetServerMocks.isSupabaseConfigured.mockReturnValue(true);
+    sharedTargetServerMocks.isSupabaseServiceConfigured.mockReturnValue(false);
+  });
+
+  it('falls through to Supabase when Postgres shared-target reads fail', async () => {
+    sharedTargetServerMocks.getPostgresServerClient.mockReturnValue({
+      unsafe: vi.fn().mockRejectedValue(new Error('password authentication failed')),
+    });
+
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        error: null,
+        data: {
+          workspace_key: 'shared',
+          season_year: 2026,
+          team_number: 5431,
+          event_key: '2026txcle',
+          event_name: 'Space City @ League City #1',
+          event_short_name: 'Space City #1',
+          event_location: 'League City, TX, USA',
+          start_date: '2026-03-07',
+          end_date: '2026-03-09',
+          last_snapshot_generated_at: null,
+          last_event_context_generated_at: null,
+          last_team_catalog_generated_at: null,
+          last_refreshed_at: null,
+          refresh_state: 'ready',
+          refresh_error: null,
+          updated_at: '2026-04-05T00:00:00.000Z',
+        },
+      }),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+
+    sharedTargetServerMocks.createSupabasePublicClient.mockReturnValue({
+      from: vi.fn().mockReturnValue(query),
+    });
+
+    const result = await loadSharedActiveTarget();
+
+    expect(result.teamNumber).toBe(5431);
+    expect(result.eventKey).toBe('2026txcle');
+    expect(sharedTargetServerMocks.markPersistenceSuccess).toHaveBeenCalled();
+    expect(sharedTargetServerMocks.markPersistenceFailure).not.toHaveBeenCalled();
+  });
+
+  it('falls through to Supabase when Postgres refresh-status reads fail', async () => {
+    sharedTargetServerMocks.getPostgresServerClient.mockReturnValue({
+      unsafe: vi.fn().mockRejectedValue(new Error('password authentication failed')),
+    });
+
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        error: null,
+        data: {
+          workspace_key: 'shared',
+          state: 'ready',
+          last_run_at: '2026-04-05T00:00:00.000Z',
+          last_success_at: '2026-04-05T00:00:00.000Z',
+          last_error_at: null,
+          last_error: null,
+          detail: { source: 'test' },
+          updated_at: '2026-04-05T00:00:00.000Z',
+        },
+      }),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+
+    sharedTargetServerMocks.createSupabasePublicClient.mockReturnValue({
+      from: vi.fn().mockReturnValue(query),
+    });
+
+    const result = await loadSharedRefreshStatus();
+
+    expect(result.state).toBe('ready');
+    expect(result.detail).toEqual({ source: 'test' });
+    expect(sharedTargetServerMocks.markPersistenceSuccess).toHaveBeenCalled();
+    expect(sharedTargetServerMocks.markPersistenceFailure).not.toHaveBeenCalled();
   });
 });
