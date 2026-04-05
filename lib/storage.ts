@@ -44,6 +44,9 @@ export const DEFAULT_SETTINGS: SettingsState = {
   themeId: 'graphite-dark',
   language: 'en',
   webhook: DEFAULT_WEBHOOK_SETTINGS,
+  operatorLabel: '',
+  freezeAutoRefresh: false,
+  deskMode: 'competition',
 };
 
 const SETTINGS_KEY = 'tbsb_dashboard_settings_v1';

@@ -6,7 +6,14 @@ import { DEFAULT_SETTINGS, DEFAULT_WEIGHTS } from './storage';
 import { createSupabaseBrowserClient } from './supabase-browser';
 import { isSupabaseConfigured } from './supabase';
 import type { StrategyRecord, StrategyRecordSummary } from './strategy-types';
-import type { CompareDraft, CompareSet, SettingsState } from './types';
+import type {
+  CompareDraft,
+  CompareSet,
+  SettingsState,
+  WorkspaceActivityEntry,
+  WorkspaceChecklist,
+  WorkspaceNote,
+} from './types';
 import { getEventWorkspaceKey } from './workspace-key';
 
 type CompareDraftScope = 'current' | 'historical';
@@ -29,7 +36,9 @@ type NamedArtifactTable =
   | typeof PERSISTENCE_TABLES.predictScenarios
   | typeof PERSISTENCE_TABLES.allianceScenarios
   | typeof PERSISTENCE_TABLES.pickLists
-  | typeof PERSISTENCE_TABLES.playoffResults;
+  | typeof PERSISTENCE_TABLES.playoffResults
+  | typeof PERSISTENCE_TABLES.workspaceNotes
+  | typeof PERSISTENCE_TABLES.workspaceChecklists;
 
 const _WORKSPACE_SETTINGS_KEYS = [
   'lagMatches',
@@ -49,6 +58,7 @@ const fallbackWorkspaceSettings = new Map<string, WorkspaceSettingsState>();
 const fallbackCompareDrafts = new Map<string, CompareDraft>();
 const fallbackNamedArtifacts = new Map<string, Map<string, NamedArtifact[]>>();
 const fallbackStrategyRecords = new Map<string, StrategyRecord>();
+const fallbackWorkspaceActivity = new Map<string, WorkspaceActivityEntry[]>();
 
 function getBrowserClient() {
   if (!isSupabaseConfigured()) return null;
@@ -209,6 +219,55 @@ function sortByUpdatedDescending<T extends NamedArtifact>(items: T[]): T[] {
     const bUpdated = Number(b.updatedAtMs ?? b.updatedAt ?? 0);
     return bUpdated - aUpdated;
   });
+}
+
+function sortByCreatedDescending<
+  T extends { createdAtMs?: number | null; createdAt?: number | string | null },
+>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aCreated = Number(a.createdAtMs ?? a.createdAt ?? 0);
+    const bCreated = Number(b.createdAtMs ?? b.createdAt ?? 0);
+    return bCreated - aCreated;
+  });
+}
+
+function normalizedFilterString(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+}
+
+type WorkspaceScopedFilter = {
+  scope?: string;
+  eventKey?: string | null;
+  teamNumber?: number | null;
+  matchKey?: string | null;
+};
+
+function matchesWorkspaceScopedFilter(
+  item: Record<string, unknown>,
+  filter: WorkspaceScopedFilter,
+): boolean {
+  if (filter.scope && normalizedFilterString(item.scope) !== normalizedFilterString(filter.scope)) {
+    return false;
+  }
+  if (
+    filter.eventKey != null &&
+    normalizedFilterString(item.eventKey) !== normalizedFilterString(filter.eventKey)
+  ) {
+    return false;
+  }
+  if (filter.teamNumber != null) {
+    const teamNumber = Number(item.teamNumber ?? 0);
+    if (!Number.isFinite(teamNumber) || Math.floor(teamNumber) !== Math.floor(filter.teamNumber)) {
+      return false;
+    }
+  }
+  if (
+    filter.matchKey != null &&
+    normalizedFilterString(item.matchKey) !== normalizedFilterString(filter.matchKey)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 async function replaceNamedArtifactsForWorkspace(
@@ -533,6 +592,130 @@ export async function saveNamedArtifactsShared<T extends NamedArtifact>(
   }
 }
 
+export async function loadWorkspaceNotesShared(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+): Promise<WorkspaceNote[]> {
+  const rows = await loadNamedArtifactsShared<WorkspaceNote>(
+    PERSISTENCE_TABLES.workspaceNotes,
+    workspaceKey,
+  );
+  return sortByUpdatedDescending(
+    rows.filter((row) => matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter)),
+  );
+}
+
+export async function saveWorkspaceNotesShared(
+  workspaceKey: string | null | undefined,
+  items: WorkspaceNote[],
+): Promise<void> {
+  await saveNamedArtifactsShared(PERSISTENCE_TABLES.workspaceNotes, workspaceKey, items);
+}
+
+export async function loadWorkspaceChecklistsShared(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+): Promise<WorkspaceChecklist[]> {
+  const rows = await loadNamedArtifactsShared<WorkspaceChecklist>(
+    PERSISTENCE_TABLES.workspaceChecklists,
+    workspaceKey,
+  );
+  return sortByUpdatedDescending(
+    rows.filter((row) => matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter)),
+  );
+}
+
+export async function saveWorkspaceChecklistsShared(
+  workspaceKey: string | null | undefined,
+  items: WorkspaceChecklist[],
+): Promise<void> {
+  await saveNamedArtifactsShared(PERSISTENCE_TABLES.workspaceChecklists, workspaceKey, items);
+}
+
+export async function listWorkspaceActivityShared(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+): Promise<WorkspaceActivityEntry[]> {
+  const scopedWorkspaceKey = requireWorkspaceKey(workspaceKey);
+  const client = getBrowserClient();
+  if (!client) {
+    return sortByCreatedDescending(
+      (fallbackWorkspaceActivity.get(scopedWorkspaceKey) ?? []).filter((row) =>
+        matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter),
+      ),
+    );
+  }
+
+  try {
+    const response = await client
+      .from(PERSISTENCE_TABLES.workspaceActivity)
+      .select('payload')
+      .eq('workspace_key', scopedWorkspaceKey)
+      .order('created_at', { ascending: false })
+      .limit(60);
+
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+
+    return sortByCreatedDescending(
+      extractPayloadArray(response.data)
+        .filter((row): row is WorkspaceActivityEntry => isRecord(row))
+        .filter((row) => matchesWorkspaceScopedFilter(row, filter)),
+    );
+  } catch {
+    return sortByCreatedDescending(
+      (fallbackWorkspaceActivity.get(scopedWorkspaceKey) ?? []).filter((row) =>
+        matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter),
+      ),
+    );
+  }
+}
+
+export async function appendWorkspaceActivityShared(entry: WorkspaceActivityEntry): Promise<void> {
+  const scopedWorkspaceKey = requireWorkspaceKey(entry.workspaceKey);
+  const normalizedEntry = {
+    ...entry,
+    workspaceKey: scopedWorkspaceKey,
+  };
+  const client = getBrowserClient();
+  if (!client) {
+    const existing = fallbackWorkspaceActivity.get(scopedWorkspaceKey) ?? [];
+    fallbackWorkspaceActivity.set(
+      scopedWorkspaceKey,
+      sortByCreatedDescending([normalizedEntry, ...existing]).slice(0, 80),
+    );
+    return;
+  }
+
+  try {
+    const { error } = await client.from(PERSISTENCE_TABLES.workspaceActivity).upsert(
+      {
+        id: normalizedEntry.id,
+        workspace_key: scopedWorkspaceKey,
+        scope: normalizedEntry.scope,
+        event_key: normalizedEntry.eventKey,
+        team_number: normalizedEntry.teamNumber,
+        match_key: normalizedEntry.matchKey,
+        action: normalizedEntry.action,
+        payload: normalizedEntry,
+        created_at: toIsoTimestamp(normalizedEntry.createdAtMs),
+      },
+      { onConflict: 'id' },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch {
+    const existing = fallbackWorkspaceActivity.get(scopedWorkspaceKey) ?? [];
+    fallbackWorkspaceActivity.set(
+      scopedWorkspaceKey,
+      sortByCreatedDescending([normalizedEntry, ...existing]).slice(0, 80),
+    );
+  }
+}
+
 export async function getStrategyRecordShared(
   eventKey: string,
   matchKey: string,
@@ -618,6 +801,10 @@ export async function listStrategyRecordsShared(
         matchLabel: row.matchLabel,
         eventName: row.eventName,
         status: row.status,
+        planSummary: row.planSummary ?? null,
+        templateId: row.templateId ?? null,
+        riskLevel: row.riskLevel ?? null,
+        copiedFrom: row.copiedFrom ?? null,
         updatedAtMs: row.updatedAtMs,
         allianceTeams: row.allianceTeams,
       }));
@@ -643,6 +830,10 @@ export async function listStrategyRecordsShared(
         matchLabel: row.matchLabel,
         eventName: row.eventName,
         status: row.status,
+        planSummary: row.planSummary ?? null,
+        templateId: row.templateId ?? null,
+        riskLevel: row.riskLevel ?? null,
+        copiedFrom: row.copiedFrom ?? null,
         updatedAtMs: row.updatedAtMs,
         allianceTeams: row.allianceTeams,
       }));
@@ -658,6 +849,10 @@ export async function listStrategyRecordsShared(
         matchLabel: row.matchLabel,
         eventName: row.eventName,
         status: row.status,
+        planSummary: row.planSummary ?? null,
+        templateId: row.templateId ?? null,
+        riskLevel: row.riskLevel ?? null,
+        copiedFrom: row.copiedFrom ?? null,
         updatedAtMs: row.updatedAtMs,
         allianceTeams: row.allianceTeams,
       }));

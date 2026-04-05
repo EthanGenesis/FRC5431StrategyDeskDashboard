@@ -1,16 +1,20 @@
 import { POST as postAllianceBundleRoute } from '../alliance-bundle/route';
 import { POST as postCompareBundleRoute } from '../compare-bundle/route';
 import { GET as getDataSuperRoute, POST as postDataSuperRoute } from '../data-super/route';
+import { GET as getDeskOpsRoute } from '../desk-ops/route';
 import { GET as getDistrictRoute } from '../district-points/route';
 import { GET as getEventContextRoute } from '../event-context/route';
 import { GET as getGameManualRoute } from '../game-manual/route';
 import { POST as postImpactBundleRoute } from '../impact-bundle/route';
+import { GET as getPickListAnalysisRoute } from '../pick-list-analysis/route';
 import { POST as postPickListBundleRoute } from '../pick-list-bundle/route';
 import { POST as postPlayoffBundleRoute } from '../playoff-bundle/route';
+import { GET as getPlayoffSummaryRoute } from '../playoff-summary/route';
 import { GET as getPreEventScoutRoute } from '../pre-event-scout/route';
 import { POST as postPredictBundleRoute } from '../predict-bundle/route';
 import { GET as getSnapshotRoute } from '../snapshot/route';
 import { POST as postTeamCompareRoute } from '../team-compare/route';
+import { GET as getTeamDossierRoute } from '../team-dossier/route';
 import { GET as getTeamProfileRoute } from '../team-profile/route';
 import { readJsonResponse } from '../../../lib/httpCache';
 import { saveWarmBundlePayload } from '../../../lib/bundle-cache-server';
@@ -316,6 +320,20 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
       (result) => ['game_manual', result] as const,
     ),
     invokeRoute(
+      'desk_ops',
+      getDeskOpsRoute,
+      new Request(
+        `${baseUrl}/api/desk-ops?eventKey=${encodeURIComponent(target.eventKey)}&team=${encodeURIComponent(String(target.teamNumber))}`,
+      ),
+    ).then((result) => ['desk_ops', result] as const),
+    invokeRoute(
+      'team_dossier',
+      getTeamDossierRoute,
+      new Request(
+        `${baseUrl}/api/team-dossier?team=${encodeURIComponent(String(target.teamNumber))}&eventKey=${encodeURIComponent(target.eventKey)}`,
+      ),
+    ).then((result) => ['team_dossier', result] as const),
+    invokeRoute(
       'compare_bundle',
       postCompareBundleRoute,
       new Request(`${baseUrl}/api/compare-bundle`, {
@@ -432,6 +450,20 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
         }),
       }),
     ).then((result) => ['pick_list_bundle', result] as const),
+    invokeRoute(
+      'pick_list_analysis',
+      getPickListAnalysisRoute,
+      new Request(
+        `${baseUrl}/api/pick-list-analysis?eventKey=${encodeURIComponent(target.eventKey)}&team=${encodeURIComponent(String(target.teamNumber))}`,
+      ),
+    ).then((result) => ['pick_list_analysis', result] as const),
+    invokeRoute(
+      'playoff_summary',
+      getPlayoffSummaryRoute,
+      new Request(
+        `${baseUrl}/api/playoff-summary?eventKey=${encodeURIComponent(target.eventKey)}&team=${encodeURIComponent(String(target.teamNumber))}`,
+      ),
+    ).then((result) => ['playoff_summary', result] as const),
   ]);
 
   const [compareSets, predictScenarios, allianceScenarios, pickLists, playoffResults] =

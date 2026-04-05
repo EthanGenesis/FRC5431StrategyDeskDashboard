@@ -3,6 +3,7 @@ type Numeric = number | null | undefined;
 export type AllianceCandidateRow = {
   teamKey: string;
   teamNumber?: number | null;
+  nickname?: string | null;
   realRank?: Numeric;
   simRank?: Numeric;
   matchesPlayed?: Numeric;

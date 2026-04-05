@@ -251,6 +251,8 @@ export type WebhookSettings = {
   events: Record<WebhookEventKey, boolean>;
 };
 
+export type DeskMode = 'competition' | 'analyst';
+
 export type SettingsState = {
   teamNumber: number;
   eventKey: string;
@@ -265,6 +267,249 @@ export type SettingsState = {
   themeId: ThemeId;
   language: LanguageCode;
   webhook: WebhookSettings;
+  operatorLabel: string;
+  freezeAutoRefresh: boolean;
+  deskMode: DeskMode;
+};
+
+export type WorkspaceNoteScope = 'event' | 'team' | 'match';
+
+export type WorkspaceNote = {
+  id: string;
+  workspaceKey: string;
+  scope: WorkspaceNoteScope;
+  eventKey: string | null;
+  teamNumber: number | null;
+  matchKey: string | null;
+  title: string;
+  body: string;
+  tags: string[];
+  pinned: boolean;
+  authorLabel: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type WorkspaceActivityScope = WorkspaceNoteScope | 'workspace';
+
+export type WorkspaceActivityType =
+  | 'note_saved'
+  | 'note_deleted'
+  | 'checklist_updated'
+  | 'strategy_saved'
+  | 'scenario_saved'
+  | 'manual_override'
+  | 'target_changed';
+
+export type WorkspaceActivityEntry = {
+  id: string;
+  workspaceKey: string;
+  scope: WorkspaceActivityScope;
+  eventKey: string | null;
+  teamNumber: number | null;
+  matchKey: string | null;
+  action: WorkspaceActivityType;
+  detail: string;
+  authorLabel: string | null;
+  createdAtMs: number;
+  payload?: ExternalRecord | null;
+};
+
+export type WorkspaceChecklistItem = {
+  id: string;
+  text: string;
+  checked: boolean;
+  updatedAtMs: number;
+  updatedByLabel: string | null;
+};
+
+export type WorkspaceChecklist = {
+  id: string;
+  workspaceKey: string;
+  scope: WorkspaceNoteScope;
+  eventKey: string | null;
+  teamNumber: number | null;
+  matchKey: string | null;
+  label: string;
+  items: WorkspaceChecklistItem[];
+  authorLabel: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type QueueLadderStep = {
+  id: 'QUEUE_5' | 'QUEUE_2' | 'QUEUE_1' | 'PLAYING_NOW';
+  label: string;
+  active: boolean;
+  completed: boolean;
+  etaLabel: string | null;
+};
+
+export type DeskOpsSourceTrust = {
+  firstStatus: SourceStatus;
+  nexusStatus: SourceStatus;
+  officialAvailability: ValidationSnapshot['officialAvailability'] | null;
+  mismatchCount: number;
+  missingCount: number;
+  staleSeconds: number | null;
+  summary: string;
+};
+
+export type DeskOpsDeltaItem = {
+  id: string;
+  label: string;
+  detail: string;
+  tone: 'neutral' | 'positive' | 'warning';
+  createdAtMs: number | null;
+};
+
+export type DeskOpsResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+  eventName: string | null;
+  queueText: string | null;
+  queueMatchesAway: number | null;
+  queueLadder: QueueLadderStep[];
+  currentMatchLabel: string | null;
+  nextMatchLabel: string | null;
+  sourceTrust: DeskOpsSourceTrust | null;
+  checklist: WorkspaceChecklist | null;
+  notes: WorkspaceNote[];
+  activity: WorkspaceActivityEntry[];
+  deltas: DeskOpsDeltaItem[];
+};
+
+export type TeamDossierRoleMetric = {
+  label: string;
+  value: number | null;
+  baseline: number | null;
+  delta: number | null;
+  insight: string;
+};
+
+export type TeamDossierResponse = {
+  generatedAtMs: number;
+  teamNumber: number;
+  loadedEventKey: string | null;
+  roleSummary: string[];
+  volatility: {
+    score: number | null;
+    label: string;
+    insight: string;
+  };
+  leverage: {
+    winConditionFlags: string[];
+    rpPressure: string[];
+  };
+  currentVsSeason: {
+    label: string;
+    current: number | null;
+    season: number | null;
+    delta: number | null;
+  }[];
+  roleMetrics: TeamDossierRoleMetric[];
+  bestEvidenceMatches: {
+    key: string;
+    label: string;
+    eventKey: string;
+    result: string;
+    margin: number | null;
+    score: number | null;
+    epa: number | null;
+    reason: string;
+  }[];
+  rankTrajectory: {
+    label: string;
+    value: number | null;
+  }[];
+};
+
+export type PickListAnalysisRoleRow = {
+  label: string;
+  teamKey: string | null;
+  teamNumber: number | null;
+  nickname: string | null;
+  insight: string;
+  pick: number | null;
+  fit: number | null;
+  denial: number | null;
+  ready: number | null;
+  ceiling: number | null;
+};
+
+export type PickListScenarioAnalysisRow = {
+  id: string;
+  name: string;
+  createdAtMs: number | null;
+  firstCount: number;
+  secondCount: number;
+  avoidCount: number;
+  decisionLogCount: number;
+  averageFit: number | null;
+  averageReady: number | null;
+  averageCeiling: number | null;
+  captainRiskCount: number;
+};
+
+export type PickListAnalysisResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string;
+  teamNumber: number | null;
+  activePickListId: string | null;
+  bucketSummary: {
+    label: string;
+    count: number;
+    avgEpa: number | null;
+    avgComposite: number | null;
+  }[];
+  bestByRole: PickListAnalysisRoleRow[];
+  ifSelectionStartedNow: {
+    label: string;
+    teamKey: string | null;
+    teamNumber: number | null;
+    detail: string;
+  }[];
+  scenarioRows: PickListScenarioAnalysisRow[];
+};
+
+export type PlayoffScenarioSummaryRow = {
+  id: string;
+  name: string;
+  createdAtMs: number | null;
+  ourSeed: number | null;
+  manualBestRound: string | null;
+  simulatedBestRound: string | null;
+  champ: number | null;
+  finals: number | null;
+  upperFinal: number | null;
+};
+
+export type PlayoffSummaryResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string;
+  teamNumber: number | null;
+  activeScenarioId: string | null;
+  liveSummary: {
+    ourSeed: number | null;
+    bestRound: string | null;
+    champ: number | null;
+    finals: number | null;
+    upperFinal: number | null;
+  } | null;
+  topAllianceOdds: {
+    seed: number;
+    teams: string[];
+    isUs: boolean;
+    champ: number;
+    finals: number;
+    upperFinal: number;
+    bestRound: string;
+  }[];
+  scenarioRows: PlayoffScenarioSummaryRow[];
 };
 
 export type AnalyticsSemanticDirection = 'positive_when_higher' | 'positive_when_lower' | 'neutral';

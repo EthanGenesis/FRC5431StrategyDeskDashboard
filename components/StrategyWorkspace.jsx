@@ -125,6 +125,9 @@ function createBlankRecord(eventKey, eventName, match) {
     },
     status: 'draft',
     notes: '',
+    planSummary: '',
+    keyWinConditions: [],
+    retroNotes: '',
     templateId: null,
     riskLevel: 'balanced',
     roleAssignments: createEmptyRoleAssignments(),
@@ -167,6 +170,9 @@ export default function StrategyWorkspace({
   const [strategyMeta, setStrategyMeta] = useState(null);
   const [status, setStatus] = useState('draft');
   const [notes, setNotes] = useState('');
+  const [planSummary, setPlanSummary] = useState('');
+  const [keyWinConditions, setKeyWinConditions] = useState('');
+  const [retroNotes, setRetroNotes] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [riskLevel, setRiskLevel] = useState('balanced');
   const [roleAssignments, setRoleAssignments] = useState(createEmptyRoleAssignments);
@@ -187,6 +193,8 @@ export default function StrategyWorkspace({
   const [teamCardMode, setTeamCardMode] = useState('compact');
   const [savedStrategies, setSavedStrategies] = useState([]);
   const [copySourceId, setCopySourceId] = useState('');
+  const [comparisonSourceId, setComparisonSourceId] = useState('');
+  const [comparisonRecord, setComparisonRecord] = useState(null);
   const [copyScope, setCopyScope] = useState('full');
   const [strategyLibrarySearch, setStrategyLibrarySearch] = useState('');
   const [strategyLibraryStatusFilter, setStrategyLibraryStatusFilter] = useState('all');
@@ -394,6 +402,11 @@ export default function StrategyWorkspace({
       });
       setStatus(record.status ?? 'draft');
       setNotes(record.notes ?? '');
+      setPlanSummary(String(record.planSummary ?? ''));
+      setKeyWinConditions(
+        Array.isArray(record.keyWinConditions) ? record.keyWinConditions.join('\n') : '',
+      );
+      setRetroNotes(String(record.retroNotes ?? ''));
       setTemplateId(String(record.templateId ?? ''));
       setRiskLevel(coerceStrategyRiskLevel(record.riskLevel));
       setRoleAssignments(normalizeRoleAssignments(record.roleAssignments));
@@ -409,6 +422,9 @@ export default function StrategyWorkspace({
       lastSavedJsonRef.current = markLoaded
         ? JSON.stringify({
             ...record,
+            planSummary: String(record.planSummary ?? ''),
+            keyWinConditions: Array.isArray(record.keyWinConditions) ? record.keyWinConditions : [],
+            retroNotes: String(record.retroNotes ?? ''),
             templateId: String(record.templateId ?? ''),
             riskLevel: coerceStrategyRiskLevel(record.riskLevel),
             roleAssignments: normalizeRoleAssignments(record.roleAssignments),
@@ -507,6 +523,12 @@ export default function StrategyWorkspace({
       ...strategyMeta,
       notes,
       status,
+      planSummary: planSummary || '',
+      keyWinConditions: keyWinConditions
+        .split('\n')
+        .map((value) => value.trim())
+        .filter(Boolean),
+      retroNotes: retroNotes || '',
       templateId: templateId || null,
       riskLevel,
       roleAssignments,
@@ -518,6 +540,9 @@ export default function StrategyWorkspace({
     strategyMeta,
     notes,
     status,
+    planSummary,
+    keyWinConditions,
+    retroNotes,
     templateId,
     riskLevel,
     roleAssignments,
@@ -536,7 +561,7 @@ export default function StrategyWorkspace({
         await saveStrategyRecordShared(currentRecord);
         lastSavedJsonRef.current = nextJson;
         setAutosaveStatus(
-          `${currentRecord.status === 'final' ? 'Final' : 'Draft'} saved ${new Date().toLocaleTimeString()}`,
+          `${String(currentRecord.status ?? 'draft').toUpperCase()} saved ${new Date().toLocaleTimeString()}`,
         );
         const rows = strategyWorkspaceKey
           ? await listStrategyRecordsShared(strategyWorkspaceKey)
@@ -654,11 +679,16 @@ export default function StrategyWorkspace({
         setNotes(String(source.notes ?? ''));
       }
       if (copyScope === 'full') {
-        setStatus(source.status === 'final' ? 'final' : 'draft');
+        setStatus(String(source.status ?? 'draft'));
         setTemplateId(String(source.templateId ?? ''));
         setRiskLevel(coerceStrategyRiskLevel(source.riskLevel));
         setRoleAssignments(normalizeRoleAssignments(source.roleAssignments));
         setContingencies(normalizeContingencies(source.contingencies));
+        setPlanSummary(String(source.planSummary ?? ''));
+        setKeyWinConditions(
+          Array.isArray(source.keyWinConditions) ? source.keyWinConditions.join('\n') : '',
+        );
+        setRetroNotes(String(source.retroNotes ?? ''));
       }
       touchMeta({
         copiedFrom: {
@@ -695,11 +725,16 @@ export default function StrategyWorkspace({
     setTeleopPast([cloneValue(importedTeleop)]);
     setTeleopFuture([]);
     setNotes(String(source?.notes ?? ''));
+    setPlanSummary(String(source?.planSummary ?? ''));
+    setKeyWinConditions(
+      Array.isArray(source?.keyWinConditions) ? source.keyWinConditions.join('\n') : '',
+    );
+    setRetroNotes(String(source?.retroNotes ?? ''));
     setTemplateId(String(source?.templateId ?? ''));
     setRiskLevel(coerceStrategyRiskLevel(source?.riskLevel));
     setRoleAssignments(normalizeRoleAssignments(source?.roleAssignments));
     setContingencies(normalizeContingencies(source?.contingencies));
-    setStatus(source?.status === 'final' ? 'final' : 'draft');
+    setStatus(String(source?.status ?? 'draft'));
     touchMeta({
       copiedFrom: {
         eventKey: String(source?.eventKey ?? 'import'),
@@ -756,6 +791,27 @@ export default function StrategyWorkspace({
     () => savedStrategies.filter((row) => row.id !== strategyMeta?.id),
     [savedStrategies, strategyMeta?.id],
   );
+  useEffect(() => {
+    let cancelled = false;
+    if (!comparisonSourceId) {
+      setComparisonRecord(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    async function loadComparisonRecord() {
+      try {
+        const record = await getStrategyRecordByIdShared(strategyWorkspaceKey, comparisonSourceId);
+        if (!cancelled) setComparisonRecord(record);
+      } catch {
+        if (!cancelled) setComparisonRecord(null);
+      }
+    }
+    void loadComparisonRecord();
+    return () => {
+      cancelled = true;
+    };
+  }, [comparisonSourceId, strategyWorkspaceKey]);
   const selectedRedRows = useMemo(
     () => selectedMatchRows.filter((row) => row.alliance === 'red'),
     [selectedMatchRows],
@@ -818,6 +874,20 @@ export default function StrategyWorkspace({
       `Template: ${strategyTemplate?.label ?? 'Custom'}`,
       `Risk: ${String(riskLevel).toUpperCase()}`,
       '',
+      'Plan Summary:',
+      String(planSummary ?? '').trim() || 'No concise plan summary yet.',
+      '',
+      'Key Win Conditions:',
+      ...(keyWinConditions
+        .split('\n')
+        .map((value) => value.trim())
+        .filter(Boolean).length
+        ? keyWinConditions
+            .split('\n')
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : ['No explicit win conditions logged yet.']),
+      '',
       `Red Alliance: ${
         (selectedMatch?.alliances?.red?.team_keys ?? [])
           .map((teamKey) => teamNumberFromKey(teamKey) ?? teamKey)
@@ -839,12 +909,18 @@ export default function StrategyWorkspace({
       '',
       'Notes:',
       String(notes ?? '').trim() || 'No notes yet.',
+      '',
+      'Retro:',
+      String(retroNotes ?? '').trim() || 'No retro notes yet.',
     ];
     return lines.join('\n');
   }, [
     eventContext?.tba?.event?.name,
+    keyWinConditions,
     notes,
+    planSummary,
     riskLevel,
+    retroNotes,
     selectedMatch,
     status,
     strategyContingencySummary,
@@ -1080,24 +1156,25 @@ export default function StrategyWorkspace({
               </option>
             ))}
           </select>
-          <button
-            className="button"
-            onClick={() => {
-              setStatus('draft');
-              touchMeta();
-            }}
-          >
-            Mark Draft
-          </button>
-          <button
-            className="button"
-            onClick={() => {
-              setStatus('final');
-              touchMeta();
-            }}
-          >
-            Mark Final
-          </button>
+          {['draft', 'ready', 'used', 'reviewed'].map((nextStatus) => (
+            <button
+              key={nextStatus}
+              className="button"
+              onClick={() => {
+                setStatus(nextStatus);
+                touchMeta();
+              }}
+              style={{ background: status === nextStatus ? '#182336' : undefined }}
+            >
+              {nextStatus === 'ready'
+                ? 'Mark Ready'
+                : nextStatus === 'used'
+                  ? 'Mark Used'
+                  : nextStatus === 'reviewed'
+                    ? 'Mark Reviewed'
+                    : 'Mark Draft'}
+            </button>
+          ))}
           <button className="button" onClick={loadLiveStats}>
             Pull Live 2026 Stats
           </button>
@@ -1219,8 +1296,9 @@ export default function StrategyWorkspace({
           <div className="panel-2" style={{ padding: 12 }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Library Fit Summary</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              Shared-team matches and saved finals stay closest to the top of the library. Use the
-              carryover controls below to pull plans forward without rewriting from scratch.
+              Shared-team matches and saved ready or reviewed plans stay closest to the top of the
+              library. Use the carryover controls below to pull plans forward without rewriting from
+              scratch.
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
               <span className="badge">Current Teams {currentTeamKeys.size}</span>
@@ -1458,6 +1536,124 @@ export default function StrategyWorkspace({
         </div>
       </DisclosureSection>
       <DisclosureSection
+        storageKey="ui.strategy.briefing"
+        title="Planning Brief And Retro"
+        description="Capture the concise plan, win conditions, review notes, and compare this match against a prior strategy."
+        defaultOpen
+      >
+        <div className="panel" style={{ padding: 16 }}>
+          <div className="grid-2" style={{ marginBottom: 14 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Plan Summary
+              </span>
+              <textarea
+                className="input"
+                rows={4}
+                value={planSummary}
+                onChange={(event) => {
+                  setPlanSummary(event.target.value);
+                  touchMeta();
+                }}
+                placeholder="State the plan in one clear paragraph."
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Key Win Conditions
+              </span>
+              <textarea
+                className="input"
+                rows={4}
+                value={keyWinConditions}
+                onChange={(event) => {
+                  setKeyWinConditions(event.target.value);
+                  touchMeta();
+                }}
+                placeholder="One condition per line."
+              />
+            </label>
+          </div>
+          <div className="grid-2" style={{ alignItems: 'start' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Post-Match Retro
+              </span>
+              <textarea
+                className="input"
+                rows={5}
+                value={retroNotes}
+                onChange={(event) => {
+                  setRetroNotes(event.target.value);
+                  touchMeta();
+                }}
+                placeholder="Capture what happened, what held up, and what to reuse later."
+              />
+            </label>
+            <div className="stack-8">
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Compare Against Saved Strategy
+                </span>
+                <select
+                  className="input"
+                  value={comparisonSourceId}
+                  onChange={(event) => setComparisonSourceId(event.target.value)}
+                >
+                  <option value="">No comparison selected</option>
+                  {copyOptions.map((row) => (
+                    <option key={`compare_${row.id}`} value={row.id}>
+                      {row.eventName} | {row.matchLabel} | {row.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {comparisonRecord ? (
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div style={{ fontWeight: 900 }}>
+                    {comparisonRecord.eventName} | {comparisonRecord.matchLabel}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Status {String(comparisonRecord.status ?? 'draft').toUpperCase()} | Template{' '}
+                    {getStrategyTemplate(comparisonRecord.templateId)?.label ??
+                      comparisonRecord.templateId ??
+                      'Custom'}{' '}
+                    | Risk {String(comparisonRecord.riskLevel ?? 'balanced').toUpperCase()}
+                  </div>
+                  <div className="muted" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>
+                    {String(comparisonRecord.planSummary ?? '').trim() || 'No saved plan summary.'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                    {(Array.isArray(comparisonRecord.keyWinConditions)
+                      ? comparisonRecord.keyWinConditions
+                      : []
+                    ).map((item, index) => (
+                      <span key={`compare_condition_${index}`} className="badge">
+                        {item}
+                      </span>
+                    ))}
+                    {!Array.isArray(comparisonRecord.keyWinConditions) ||
+                    !comparisonRecord.keyWinConditions.length ? (
+                      <span className="badge">No stored win conditions</span>
+                    ) : null}
+                  </div>
+                  <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                    Retro:{' '}
+                    {String(comparisonRecord.retroNotes ?? '').trim() || 'No retro notes saved.'}
+                  </div>
+                </div>
+              ) : (
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div className="muted">
+                    Select a saved strategy to compare its summary, win conditions, and retro.
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </DisclosureSection>
+      <DisclosureSection
         storageKey="ui.strategy.library"
         title="Saved Strategy Library"
         description="Search saved strategy records and reopen nearby or similar matches quickly."
@@ -1486,7 +1682,9 @@ export default function StrategyWorkspace({
             >
               <option value="all">All Statuses</option>
               <option value="draft">Draft Only</option>
-              <option value="final">Final Only</option>
+              <option value="ready">Ready Only</option>
+              <option value="used">Used Only</option>
+              <option value="reviewed">Reviewed Only</option>
             </select>
             <select
               className="input"

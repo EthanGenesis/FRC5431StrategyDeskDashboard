@@ -18,6 +18,7 @@ This repo is currently a `Next.js 16` app that already depends on `TBA_AUTH_KEY`
 - [lib/persistence-surfaces.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/persistence-surfaces.ts)
 - [lib/persistence-types.ts](/c:/Users/ethan/Desktop/tbsb-dashboard/lib/persistence-types.ts)
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
+- [supabase/002_workspace_expansion.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/002_workspace_expansion.sql)
 - [Dockerfile.hot-plane](/c:/Users/ethan/Desktop/tbsb-dashboard/Dockerfile.hot-plane)
 - [fly.hot-plane.toml](/c:/Users/ethan/Desktop/tbsb-dashboard/fly.hot-plane.toml)
 
@@ -193,6 +194,7 @@ Supabase Auth is optional for the first cut of this shared-link model.
 Open the SQL editor in Supabase and run:
 
 - [supabase/001_shared_workspace.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/001_shared_workspace.sql)
+- [supabase/002_workspace_expansion.sql](/c:/Users/ethan/Desktop/tbsb-dashboard/supabase/002_workspace_expansion.sql)
 
 If you already ran an older version of this SQL file, run the updated file again so the RLS policies allow the new `event:*` workspace keys.
 
@@ -216,6 +218,9 @@ This creates:
 - `tbsb_upstream_cache`
 - `tbsb_parity_audit_log`
 - `tbsb_perf_samples`
+- `tbsb_workspace_notes`
+- `tbsb_workspace_activity`
+- `tbsb_workspace_checklists`
 
 It also adds the required Supabase Realtime publication entries for the shared desk tables. If you ran an older version before Realtime support existed, rerun the latest SQL so the publication includes the live-collaboration tables.
 

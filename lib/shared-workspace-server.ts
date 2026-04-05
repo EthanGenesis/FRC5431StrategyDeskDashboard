@@ -3,7 +3,13 @@ import { PERSISTENCE_TABLES } from './persistence-surfaces';
 import { getPostgresServerClient } from './postgres-server';
 import { isSupabaseServiceConfigured } from './supabase';
 import { createSupabaseAdminClient } from './supabase-server';
-import type { CompareDraft, CompareSet } from './types';
+import type {
+  CompareDraft,
+  CompareSet,
+  WorkspaceActivityEntry,
+  WorkspaceChecklist,
+  WorkspaceNote,
+} from './types';
 
 const SUPABASE_OPERATION_TIMEOUT_MS = 2500;
 
@@ -19,7 +25,9 @@ export type NamedArtifactTable =
   | typeof PERSISTENCE_TABLES.predictScenarios
   | typeof PERSISTENCE_TABLES.allianceScenarios
   | typeof PERSISTENCE_TABLES.pickLists
-  | typeof PERSISTENCE_TABLES.playoffResults;
+  | typeof PERSISTENCE_TABLES.playoffResults
+  | typeof PERSISTENCE_TABLES.workspaceNotes
+  | typeof PERSISTENCE_TABLES.workspaceChecklists;
 
 const NAMED_ARTIFACT_TABLES = new Set<NamedArtifactTable>([
   PERSISTENCE_TABLES.compareSets,
@@ -27,6 +35,8 @@ const NAMED_ARTIFACT_TABLES = new Set<NamedArtifactTable>([
   PERSISTENCE_TABLES.allianceScenarios,
   PERSISTENCE_TABLES.pickLists,
   PERSISTENCE_TABLES.playoffResults,
+  PERSISTENCE_TABLES.workspaceNotes,
+  PERSISTENCE_TABLES.workspaceChecklists,
 ]);
 
 function getAdminClient() {
@@ -92,6 +102,10 @@ function extractPayloadArray<T>(data: unknown): T[] {
   return data
     .map((row) => (isRecord(row) ? row.payload : null))
     .filter((payload): payload is T => payload != null);
+}
+
+function normalizedFilterString(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 }
 
 export async function loadCompareDraftSharedServer(
@@ -287,6 +301,135 @@ export async function loadNamedArtifactsSharedServer<T extends NamedArtifact>(
       'named_artifacts_read_failed',
       scopedWorkspaceKey,
       error instanceof Error ? error.message : 'Unknown named artifacts read error',
+    );
+    return [];
+  }
+}
+
+type WorkspaceScopedFilter = {
+  scope?: string;
+  eventKey?: string | null;
+  teamNumber?: number | null;
+  matchKey?: string | null;
+};
+
+function matchesWorkspaceScopedFilter(
+  item: Record<string, unknown>,
+  filter: WorkspaceScopedFilter,
+): boolean {
+  if (filter.scope && normalizedFilterString(item.scope) !== normalizedFilterString(filter.scope)) {
+    return false;
+  }
+  if (
+    filter.eventKey != null &&
+    normalizedFilterString(item.eventKey) !== normalizedFilterString(filter.eventKey)
+  ) {
+    return false;
+  }
+  if (filter.teamNumber != null) {
+    const teamNumber = Number(item.teamNumber ?? 0);
+    if (!Number.isFinite(teamNumber) || Math.floor(teamNumber) !== Math.floor(filter.teamNumber)) {
+      return false;
+    }
+  }
+  if (
+    filter.matchKey != null &&
+    normalizedFilterString(item.matchKey) !== normalizedFilterString(filter.matchKey)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export async function loadWorkspaceNotesSharedServer(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+): Promise<WorkspaceNote[]> {
+  const rows = await loadNamedArtifactsSharedServer<WorkspaceNote>(
+    PERSISTENCE_TABLES.workspaceNotes,
+    workspaceKey,
+  );
+  return rows.filter((row) => matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter));
+}
+
+export async function loadWorkspaceChecklistsSharedServer(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+): Promise<WorkspaceChecklist[]> {
+  const rows = await loadNamedArtifactsSharedServer<WorkspaceChecklist>(
+    PERSISTENCE_TABLES.workspaceChecklists,
+    workspaceKey,
+  );
+  return rows.filter((row) => matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter));
+}
+
+export async function loadWorkspaceActivitySharedServer(
+  workspaceKey: string | null | undefined,
+  filter: WorkspaceScopedFilter = {},
+  limit = 40,
+): Promise<WorkspaceActivityEntry[]> {
+  const scopedWorkspaceKey = String(workspaceKey ?? '').trim();
+  if (!scopedWorkspaceKey) return [];
+
+  const postgres = getPostgresClient();
+  if (postgres) {
+    try {
+      const rows = await withTimeout(
+        postgres.unsafe(
+          `
+            select payload
+            from public.${PERSISTENCE_TABLES.workspaceActivity}
+            where workspace_key = $1
+            order by created_at desc
+            limit $2
+          `,
+          [scopedWorkspaceKey, limit],
+        ),
+        `load workspace activity for ${scopedWorkspaceKey}`,
+      );
+      return extractPayloadArray<WorkspaceActivityEntry>(rows).filter((row) =>
+        matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter),
+      );
+    } catch (error) {
+      logWorkspaceReadFailure(
+        'workspace_activity_postgres_read_failed',
+        scopedWorkspaceKey,
+        error instanceof Error ? error.message : 'Unknown workspace activity Postgres read error',
+      );
+    }
+  }
+
+  const admin = getAdminClient();
+  if (!admin) return [];
+
+  try {
+    const response = await withTimeout(
+      admin
+        .from(PERSISTENCE_TABLES.workspaceActivity)
+        .select('payload')
+        .eq('workspace_key', scopedWorkspaceKey)
+        .order('created_at', { ascending: false })
+        .limit(limit),
+      `load workspace activity for ${scopedWorkspaceKey}`,
+    );
+
+    if (response.error) {
+      logWorkspaceReadFailure(
+        'workspace_activity_read_failed',
+        scopedWorkspaceKey,
+        response.error.message,
+      );
+      return [];
+    }
+
+    return extractPayloadArray<WorkspaceActivityEntry>(response.data).filter((row) =>
+      matchesWorkspaceScopedFilter(row as Record<string, unknown>, filter),
+    );
+  } catch (error) {
+    logWorkspaceReadFailure(
+      'workspace_activity_read_failed',
+      scopedWorkspaceKey,
+      error instanceof Error ? error.message : 'Unknown workspace activity read error',
     );
     return [];
   }

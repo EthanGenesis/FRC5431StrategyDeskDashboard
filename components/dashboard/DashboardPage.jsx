@@ -91,6 +91,15 @@ const DistrictPointsTab = deferredPanel(
   'Loading district points...',
 );
 const GameManualTab = deferredPanel(() => import('../GameManualTab'), 'Loading game manual...');
+const DeskOpsPanel = deferredPanel(() => import('../DeskOpsPanel'), 'Loading desk ops...');
+const PickListAnalysisPanel = deferredPanel(
+  () => import('../PickListAnalysisPanel'),
+  'Loading pick-list analysis...',
+);
+const PlayoffSummaryPanel = deferredPanel(
+  () => import('../PlayoffSummaryPanel'),
+  'Loading playoff summary...',
+);
 
 const EVENT_SEARCH_YEAR = 2026;
 const OPEN_TAB_REFRESH_MS = 10_000;
@@ -898,6 +907,9 @@ export default function HomePage() {
 
   const activePageMeta = PAGE_META[majorTab]?.[tab] ?? PAGE_META.SETTINGS.SETTINGS;
   const language = settings.language ?? 'en';
+  const operatorLabel = String(settings.operatorLabel ?? '').trim();
+  const freezeAutoRefresh = Boolean(settings.freezeAutoRefresh);
+  const deskMode = settings.deskMode ?? 'competition';
   const sourceValidation = snapshot?.validation ?? null;
   const officialSnapshot = snapshot?.official ?? null;
   const nexusSnapshot = snapshot?.nexus ?? null;
@@ -1140,7 +1152,13 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!loadedEventKey || !loadedTeam || !predictForecastSurfaceActive || mcProjectionDirty) {
+    if (
+      !loadedEventKey ||
+      !loadedTeam ||
+      !predictForecastSurfaceActive ||
+      mcProjectionDirty ||
+      freezeAutoRefresh
+    ) {
       setPredictBundleHydrating(false);
       return () => {
         cancelled = true;
@@ -1198,6 +1216,7 @@ export default function HomePage() {
     loadedTeam,
     mcProjectionDirty,
     predictForecastSurfaceActive,
+    freezeAutoRefresh,
   ]);
   useEffect(() => {
     let cancelled = false;
@@ -1208,7 +1227,8 @@ export default function HomePage() {
       majorTab !== 'PREDICT' ||
       predictSubTab !== 'ALLIANCE' ||
       allianceSourceType !== 'live' ||
-      allianceLiveLocked
+      allianceLiveLocked ||
+      freezeAutoRefresh
     ) {
       return () => {
         cancelled = true;
@@ -1259,6 +1279,7 @@ export default function HomePage() {
     loadedTeam,
     majorTab,
     predictSubTab,
+    freezeAutoRefresh,
   ]);
   useEffect(() => {
     let cancelled = false;
@@ -1270,7 +1291,8 @@ export default function HomePage() {
       predictSubTab !== 'PLAYOFF_LAB' ||
       playoffLabSourceType !== 'live' ||
       allianceLiveLocked ||
-      Object.keys(playoffLabWinners).length
+      Object.keys(playoffLabWinners).length ||
+      freezeAutoRefresh
     ) {
       return () => {
         cancelled = true;
@@ -1326,11 +1348,18 @@ export default function HomePage() {
     playoffSimModel,
     playoffSimRuns,
     predictSubTab,
+    freezeAutoRefresh,
   ]);
   useEffect(() => {
     let cancelled = false;
 
-    if (!loadedEventKey || !loadedTeam || majorTab !== 'PREDICT' || predictSubTab !== 'IMPACT') {
+    if (
+      !loadedEventKey ||
+      !loadedTeam ||
+      majorTab !== 'PREDICT' ||
+      predictSubTab !== 'IMPACT' ||
+      freezeAutoRefresh
+    ) {
       return () => {
         cancelled = true;
       };
@@ -1379,6 +1408,7 @@ export default function HomePage() {
     loadedTeam,
     majorTab,
     predictSubTab,
+    freezeAutoRefresh,
   ]);
   useEffect(() => {
     let cancelled = false;
@@ -1387,7 +1417,8 @@ export default function HomePage() {
       !loadedEventKey ||
       !loadedTeam ||
       majorTab !== 'PREDICT' ||
-      !['PICK_LIST', 'LIVE_ALLIANCE'].includes(predictSubTab)
+      !['PICK_LIST', 'LIVE_ALLIANCE'].includes(predictSubTab) ||
+      freezeAutoRefresh
     ) {
       return () => {
         cancelled = true;
@@ -1438,6 +1469,7 @@ export default function HomePage() {
     loadedTeam,
     majorTab,
     predictSubTab,
+    freezeAutoRefresh,
   ]);
   useEffect(() => {
     resetDashboardBootDebug();
@@ -2439,7 +2471,7 @@ export default function HomePage() {
     setSelectedEventOption(null);
   }, [draftEventKey, selectedEventOption]);
   useEffect(() => {
-    if (!loadedTeam || !loadedEventKey || offlineMode) return;
+    if (!loadedTeam || !loadedEventKey || offlineMode || freezeAutoRefresh) return;
     const preferWarmSnapshot = preferWarmSnapshotOnNextAutoLoadRef.current;
     if (preferWarmSnapshot) {
       preferWarmSnapshotOnNextAutoLoadRef.current = false;
@@ -2454,7 +2486,7 @@ export default function HomePage() {
       clamp(settings.pollMs, 2000, 60000),
     );
     return () => window.clearInterval(id);
-  }, [fetchSnapshot, loadedTeam, loadedEventKey, offlineMode, settings.pollMs]);
+  }, [fetchSnapshot, loadedTeam, loadedEventKey, offlineMode, settings.pollMs, freezeAutoRefresh]);
   useEffect(() => {
     if (!activeWorkspaceKey || !loadedEventKey || !isSupabaseConfigured()) return;
 
@@ -6187,6 +6219,14 @@ export default function HomePage() {
             </div>
           </DisclosureSection>
         ) : null}
+        <DeskOpsPanel
+          workspaceKey={activeWorkspaceKey}
+          loadedEventKey={loadedEventKey}
+          loadedTeam={loadedTeam}
+          currentMatchKey={livePointers.ourNextMatch?.key ?? null}
+          operatorLabel={operatorLabel}
+          externalUpdateKey={bundleStatusSyncKey + liveSignals.length}
+        />
       </div>
     );
   }
@@ -9170,6 +9210,12 @@ export default function HomePage() {
     };
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
+        <PlayoffSummaryPanel
+          eventKey={loadedEventKey}
+          teamNumber={loadedTeam}
+          activeScenarioId={activePlayoffResultId}
+          externalUpdateKey={bundleStatusSyncKey + savedPlayoffResults.length + allianceLiveLocked}
+        />
         <div className="panel" style={{ padding: 16 }}>
           <div
             style={{
@@ -9517,6 +9563,12 @@ export default function HomePage() {
     ];
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
+        <PickListAnalysisPanel
+          eventKey={loadedEventKey}
+          teamNumber={loadedTeam}
+          activePickListId={activePickListId}
+          externalUpdateKey={bundleStatusSyncKey + pickLists.length + savedPlayoffResults.length}
+        />
         <div className="panel" style={{ padding: 16 }}>
           <div
             style={{
@@ -10774,6 +10826,55 @@ export default function HomePage() {
                   </select>
                 </label>
               </div>
+              <div className="grid-2">
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Operator Label
+                  </span>
+                  <input
+                    className="input"
+                    value={settings.operatorLabel ?? ''}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        operatorLabel: e.target.value,
+                      }))
+                    }
+                    placeholder="Ethan / Drive Coach / Scout Lead"
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Desk Mode
+                  </span>
+                  <select
+                    className="input"
+                    value={settings.deskMode ?? 'competition'}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        deskMode: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="competition">Competition Mode</option>
+                    <option value="analyst">Analyst Mode</option>
+                  </select>
+                </label>
+              </div>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.freezeAutoRefresh)}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      freezeAutoRefresh: e.target.checked,
+                    }))
+                  }
+                />
+                Freeze live refresh while we discuss or review manually
+              </label>
               <div>
                 <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
                   {t('settings.upload_logo', 'Upload Team Logo')}
@@ -11305,6 +11406,14 @@ export default function HomePage() {
         value: Math.round(settings.pollMs / 1000),
       })}
     </span>,
+    <span key="desk_mode" className="badge">
+      {deskMode === 'competition' ? 'Competition Mode' : 'Analyst Mode'}
+    </span>,
+    freezeAutoRefresh ? (
+      <span key="freeze" className="badge badge-red">
+        Freeze Mode
+      </span>
+    ) : null,
     sourceValidation ? (
       <span
         key="official"
@@ -11321,6 +11430,11 @@ export default function HomePage() {
     liveSignals.length ? (
       <span key="signals" className="badge">
         {t('field.signals', 'Signals')} {liveSignals.length}
+      </span>
+    ) : null,
+    operatorLabel ? (
+      <span key="operator" className="badge">
+        Operator {operatorLabel}
       </span>
     ) : null,
   ];

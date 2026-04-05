@@ -11,7 +11,7 @@ import type {
   StrategyRoleAssignments,
 } from './strategy-presets';
 
-export type StrategyStatus = 'draft' | 'final';
+export type StrategyStatus = 'none' | 'draft' | 'ready' | 'used' | 'reviewed';
 
 type ExternalRecord = Record<string, unknown>;
 type ExternalArray = ExternalRecord[];
@@ -78,6 +78,9 @@ export type StrategyRecord = {
   };
   status: StrategyStatus;
   notes: string;
+  planSummary?: string | null;
+  keyWinConditions?: string[] | null;
+  retroNotes?: string | null;
   templateId?: string | null;
   riskLevel?: StrategyRiskLevel | null;
   roleAssignments?: StrategyRoleAssignments | null;
@@ -101,6 +104,10 @@ export type StrategyRecordSummary = Pick<
   | 'matchLabel'
   | 'eventName'
   | 'status'
+  | 'planSummary'
+  | 'templateId'
+  | 'riskLevel'
+  | 'copiedFrom'
   | 'updatedAtMs'
   | 'allianceTeams'
 >;

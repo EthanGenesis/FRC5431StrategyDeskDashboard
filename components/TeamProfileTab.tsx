@@ -8,6 +8,7 @@ import type { TeamProfileMatch, TeamProfileRouteResponse } from '../lib/strategy
 import type { NexusOpsSnapshot } from '../lib/types';
 import AnalyticsChartBlock from './AnalyticsChartBlock';
 import SafeRichText from './SafeRichText';
+import TeamDossierPanel from './TeamDossierPanel';
 import DisclosureSection from './ui/DisclosureSection';
 
 type LooseRecord = Record<string, any>;
@@ -348,6 +349,11 @@ export default function TeamProfileTab({
             : 'Historical-only TEAM_PROFILE view using 2026 data excluding the loaded event.'}
         </div>
       </div>
+      <TeamDossierPanel
+        teamNumber={activeTeamNumber}
+        loadedEventKey={loadedEventKey ?? ''}
+        externalUpdateKey={externalUpdateKey}
+      />
 
       {!profile ? (
         <div className="panel" style={{ padding: 16 }}>
