@@ -235,6 +235,23 @@ function normalizedFilterString(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 }
 
+function nullableFilterString(value: unknown): string | null {
+  const normalized = normalizedFilterString(value).trim();
+  return normalized || null;
+}
+
+function nullableInteger(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizedWorkspaceScope(value: unknown): 'event' | 'team' | 'match' {
+  const normalized = normalizedFilterString(value).trim().toLowerCase();
+  if (normalized === 'team' || normalized === 'match') return normalized;
+  return 'event';
+}
+
 type WorkspaceScopedFilter = {
   scope?: string;
   eventKey?: string | null;
@@ -293,14 +310,28 @@ async function replaceNamedArtifactsForWorkspace(
 
   if (currentItems.length) {
     const { error: upsertError } = await client.from(table).upsert(
-      currentItems.map((item) => ({
-        id: storageIdForWorkspace(scopedWorkspaceKey, item.id),
-        workspace_key: scopedWorkspaceKey,
-        label: artifactLabel(item),
-        payload: item,
-        created_at: toIsoTimestamp(item.createdAtMs ?? item.createdAt),
-        updated_at: toIsoTimestamp(item.updatedAtMs ?? item.updatedAt),
-      })),
+      currentItems.map((item) => {
+        const baseRow: Record<string, unknown> = {
+          id: storageIdForWorkspace(scopedWorkspaceKey, item.id),
+          workspace_key: scopedWorkspaceKey,
+          label: artifactLabel(item),
+          payload: item,
+          created_at: toIsoTimestamp(item.createdAtMs ?? item.createdAt),
+          updated_at: toIsoTimestamp(item.updatedAtMs ?? item.updatedAt),
+        };
+
+        if (
+          table === PERSISTENCE_TABLES.workspaceNotes ||
+          table === PERSISTENCE_TABLES.workspaceChecklists
+        ) {
+          baseRow.scope = normalizedWorkspaceScope(item.scope);
+          baseRow.event_key = nullableFilterString(item.eventKey);
+          baseRow.team_number = nullableInteger(item.teamNumber);
+          baseRow.match_key = nullableFilterString(item.matchKey);
+        }
+
+        return baseRow;
+      }),
       { onConflict: 'id' },
     );
 
