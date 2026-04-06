@@ -12,6 +12,7 @@ type TeamDossierPanelProps = {
   teamNumber?: number | null;
   loadedEventKey?: string;
   externalUpdateKey?: number;
+  payloadOverride?: TeamDossierResponse | null;
 };
 
 function fmt(value: unknown, digits = 1): string {
@@ -23,12 +24,18 @@ export default function TeamDossierPanel({
   teamNumber = null,
   loadedEventKey = '',
   externalUpdateKey = 0,
+  payloadOverride = null,
 }: TeamDossierPanelProps) {
   const [dossier, setDossier] = useState<TeamDossierResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
 
   const loadDossier = useCallback(async () => {
+    if (payloadOverride) {
+      setDossier(payloadOverride);
+      setErrorText('');
+      return;
+    }
     if (!teamNumber) {
       setDossier(null);
       return;
@@ -50,7 +57,7 @@ export default function TeamDossierPanel({
     } finally {
       setLoading(false);
     }
-  }, [loadedEventKey, teamNumber]);
+  }, [loadedEventKey, payloadOverride, teamNumber]);
 
   useEffect(() => {
     void loadDossier();

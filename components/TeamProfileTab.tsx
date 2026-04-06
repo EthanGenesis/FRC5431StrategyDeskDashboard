@@ -5,7 +5,7 @@ import { fetchJsonOrThrow } from '../lib/httpCache';
 import { teamNumberFromKey } from '../lib/logic';
 import { deriveTeamOpsFromNexusSnapshot } from '../lib/nexus-ops';
 import type { TeamProfileMatch, TeamProfileRouteResponse } from '../lib/strategy-types';
-import type { NexusOpsSnapshot } from '../lib/types';
+import type { NexusOpsSnapshot, TeamDossierResponse } from '../lib/types';
 import AnalyticsChartBlock from './AnalyticsChartBlock';
 import SafeRichText from './SafeRichText';
 import TeamDossierPanel from './TeamDossierPanel';
@@ -29,6 +29,7 @@ type TeamProfileTabProps = {
   onAddToCompare?: (teamNumber: number) => void;
   scope?: TeamProfileScope;
   externalUpdateKey?: number;
+  dossierOverride?: TeamDossierResponse | null;
 };
 
 function fmt(value: unknown, digits = 1): string {
@@ -112,6 +113,7 @@ export default function TeamProfileTab({
   onAddToCompare,
   scope = 'current',
   externalUpdateKey = 0,
+  dossierOverride = null,
 }: TeamProfileTabProps): ReactElement {
   const [searchInput, setSearchInput] = useState(() =>
     suggestedTeamNumber != null ? String(suggestedTeamNumber) : '',
@@ -353,6 +355,7 @@ export default function TeamProfileTab({
         teamNumber={activeTeamNumber}
         loadedEventKey={loadedEventKey ?? ''}
         externalUpdateKey={externalUpdateKey}
+        payloadOverride={dossierOverride}
       />
 
       {!profile ? (

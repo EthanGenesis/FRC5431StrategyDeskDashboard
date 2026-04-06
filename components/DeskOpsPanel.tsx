@@ -25,6 +25,7 @@ type DeskOpsPanelProps = {
   currentMatchKey?: string | null;
   operatorLabel?: string;
   externalUpdateKey?: number;
+  responseOverride?: DeskOpsResponse | null;
 };
 
 function fmtTimestamp(value: number | null | undefined): string {
@@ -83,6 +84,7 @@ export default function DeskOpsPanel({
   currentMatchKey = null,
   operatorLabel = '',
   externalUpdateKey = 0,
+  responseOverride = null,
 }: DeskOpsPanelProps) {
   const [ops, setOps] = useState<DeskOpsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,6 +95,11 @@ export default function DeskOpsPanel({
   const [saving, setSaving] = useState(false);
 
   const reloadOps = useCallback(async () => {
+    if (responseOverride) {
+      setOps(responseOverride);
+      setErrorText('');
+      return;
+    }
     if (!workspaceKey || !loadedEventKey || !loadedTeam) {
       setOps(null);
       return;
@@ -116,19 +123,20 @@ export default function DeskOpsPanel({
     } finally {
       setIsLoading(false);
     }
-  }, [loadedEventKey, loadedTeam, workspaceKey]);
+  }, [loadedEventKey, loadedTeam, responseOverride, workspaceKey]);
 
   useEffect(() => {
     void reloadOps();
   }, [externalUpdateKey, reloadOps]);
 
   useEffect(() => {
+    if (responseOverride) return undefined;
     if (!workspaceKey || !loadedEventKey || !loadedTeam) return undefined;
     const id = window.setInterval(() => {
       void reloadOps();
     }, 15000);
     return () => window.clearInterval(id);
-  }, [loadedEventKey, loadedTeam, reloadOps, workspaceKey]);
+  }, [loadedEventKey, loadedTeam, reloadOps, responseOverride, workspaceKey]);
 
   const visibleNotes = useMemo(() => {
     const rows = ops?.notes ?? [];

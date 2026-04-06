@@ -1121,7 +1121,7 @@ test('typing a team number shows 2026 team events and selecting one loads immedi
     page.getByRole('button', { name: /Waco\b/i }).click(),
   ]);
 
-  await expect(page.getByText('Waco (2026txwac)')).toBeVisible();
+  await expect(page.getByRole('button', { name: /5431 \| Waco \(2026txwac\)/i })).toBeVisible();
   await expect(page.locator('.dashboard-status-strip')).toContainText('Event 2026txwac');
 });
 

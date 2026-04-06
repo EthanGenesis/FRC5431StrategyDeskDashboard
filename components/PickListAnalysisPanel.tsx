@@ -13,6 +13,7 @@ type PickListAnalysisPanelProps = {
   teamNumber?: number | null;
   activePickListId?: string | null;
   externalUpdateKey?: number;
+  analysisOverride?: PickListAnalysisResponse | null;
 };
 
 function fmt(value: unknown, digits = 1): string {
@@ -25,11 +26,17 @@ export default function PickListAnalysisPanel({
   teamNumber = null,
   activePickListId = null,
   externalUpdateKey = 0,
+  analysisOverride = null,
 }: PickListAnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<PickListAnalysisResponse | null>(null);
   const [errorText, setErrorText] = useState('');
 
   const loadAnalysis = useCallback(async () => {
+    if (analysisOverride) {
+      setAnalysis(analysisOverride);
+      setErrorText('');
+      return;
+    }
     if (!eventKey || !teamNumber) {
       setAnalysis(null);
       return;
@@ -51,7 +58,7 @@ export default function PickListAnalysisPanel({
       setErrorText(error instanceof Error ? error.message : 'Unknown pick-list analysis error');
       setAnalysis(null);
     }
-  }, [activePickListId, eventKey, teamNumber]);
+  }, [activePickListId, analysisOverride, eventKey, teamNumber]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {

@@ -16,6 +16,7 @@ type PitModeOverlayProps = {
   teamNumber?: number | null;
   snapshotOverride?: AppSnapshot | null;
   externalUpdateKey?: number;
+  payloadOverride?: PitOpsResponse | null;
 };
 
 function fmtClockTime(value: number | null | undefined): string {
@@ -55,6 +56,7 @@ export default function PitModeOverlay({
   teamNumber = null,
   snapshotOverride = null,
   externalUpdateKey = 0,
+  payloadOverride = null,
 }: PitModeOverlayProps) {
   const [payload, setPayload] = useState<PitOpsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -63,6 +65,11 @@ export default function PitModeOverlay({
 
   const loadPitOps = useCallback(async () => {
     if (!open) return;
+    if (payloadOverride) {
+      setPayload(payloadOverride);
+      setErrorText('');
+      return;
+    }
     if (snapshotOverride && workspaceKey && eventKey && teamNumber) {
       setPayload(
         buildPitOpsResponse({
@@ -99,7 +106,7 @@ export default function PitModeOverlay({
     } finally {
       setLoading(false);
     }
-  }, [eventKey, open, snapshotOverride, teamNumber, workspaceKey]);
+  }, [eventKey, open, payloadOverride, snapshotOverride, teamNumber, workspaceKey]);
 
   useEffect(() => {
     if (!open) return undefined;

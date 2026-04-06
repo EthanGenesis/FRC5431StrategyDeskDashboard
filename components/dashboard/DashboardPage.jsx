@@ -7,6 +7,7 @@ import YouTubeWebcastPlayer from '../YouTubeWebcastPlayer';
 import PageHeader from '../ui/PageHeader';
 import ProductClock from '../ui/ProductClock';
 import DisclosureSection from '../ui/DisclosureSection';
+import WorkspacePresencePills from '../ui/WorkspacePresencePills';
 import DashboardPreferencesProvider from '../providers/DashboardPreferencesProvider';
 import { createSupabaseBrowserClient } from '../../lib/supabase-browser';
 import {
@@ -52,10 +53,28 @@ import {
   translate,
 } from '../../lib/product-preferences';
 import {
+  clearDeskPacks,
+  clearReplaySessions,
+  deleteRehearsalDrill,
+  deleteWorkspacePreset,
+  duplicateRehearsalDrill,
+  getLastKnownGoodDeskPack,
+  loadRecentSearches,
+  loadRehearsalDrills,
+  loadReplaySessions,
+  loadWorkspacePresets,
+  saveDeskPack,
+  saveRecentSearch,
+  saveRehearsalDrill,
+  saveReplaySession,
+  saveWorkspacePreset,
+} from '../../lib/operator-local-tools';
+import {
   normalizeSharedActiveTarget,
   normalizeTeamEventCatalogEntry,
   teamEventLabel,
 } from '../../lib/shared-target';
+import { useWorkspacePresence } from '../../lib/use-workspace-presence';
 
 function DeferredPanelPlaceholder({ label = 'Loading section...' }) {
   return (
@@ -111,6 +130,13 @@ const PitModeOverlay = deferredPanel(() => import('../PitModeOverlay'), 'Loading
 
 const EVENT_SEARCH_YEAR = 2026;
 const OPEN_TAB_REFRESH_MS = 10_000;
+const LIKELY_NEXT_WARM_SURFACES = [
+  'desk-ops',
+  'team-dossier',
+  'pick-list-analysis',
+  'playoff-summary',
+  'pit-ops',
+];
 const AUDIO_PATTERN_BY_QUEUE = {
   QUEUE_5: [0],
   QUEUE_2: [0, 0.18],
@@ -801,7 +827,7 @@ function buildEventSearchOptionFromTarget(target) {
   });
 }
 
-export default function HomePage() {
+export default function HomePage({ initialPitMode = false, shellVariant = 'default' } = {}) {
   const MONTE_CARLO_SCENARIO_DEPTH = 12;
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [localSettingsReady, setLocalSettingsReady] = useState(false);
@@ -875,6 +901,13 @@ export default function HomePage() {
   const [playoffWarmBundle, setPlayoffWarmBundle] = useState(null);
   const [impactWarmBundle, setImpactWarmBundle] = useState(null);
   const [pickListWarmBundle, setPickListWarmBundle] = useState(null);
+  const [deskSupportPayloads, setDeskSupportPayloads] = useState({
+    deskOps: null,
+    teamDossier: null,
+    pickListAnalysis: null,
+    playoffSummary: null,
+    pitOps: null,
+  });
   const [mcProjectionSnapshot, setMcProjectionSnapshot] = useState(null);
   const [mcProjectionDirty, setMcProjectionDirty] = useState(false);
   const [lastMcCompletedQualCount, setLastMcCompletedQualCount] = useState(0);
@@ -897,6 +930,17 @@ export default function HomePage() {
   const [sharedWorkspaceReady, setSharedWorkspaceReady] = useState(false);
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState(null);
   const [rehearsalConfig, setRehearsalConfig] = useState(DEFAULT_REHEARSAL_MODE_CONFIG);
+  const [rehearsalLibrary, setRehearsalLibrary] = useState([]);
+  const [rehearsalDrillName, setRehearsalDrillName] = useState('');
+  const [workspacePresets, setWorkspacePresets] = useState([]);
+  const [presetName, setPresetName] = useState('');
+  const [recentSearches, setRecentSearches] = useState([]);
+  const [lastKnownGoodPack, setLastKnownGoodPack] = useState(null);
+  const [replaySessions, setReplaySessions] = useState([]);
+  const [activeReplayPack, setActiveReplayPack] = useState(null);
+  const [operatorConsoleText, setOperatorConsoleText] = useState('');
+  const [queueAlertText, setQueueAlertText] = useState('');
+  const [queueAlertActive, setQueueAlertActive] = useState(false);
   const webhookSentAtRef = useRef(new Map());
   const previousQueueStateRef = useRef(null);
   const previousOfflineModeRef = useRef(null);
@@ -930,19 +974,56 @@ export default function HomePage() {
           ? PREDICT_TABS
           : [];
   const activeWorkspaceKey = useMemo(() => getEventWorkspaceKey(loadedEventKey), [loadedEventKey]);
+  const pitRouteMode = shellVariant === 'pit';
+  const replayModeActive = Boolean(activeReplayPack);
   const rehearsalSnapshot = useMemo(
     () =>
       rehearsalConfig.active ? applyRehearsalMode(liveSnapshot, loadedTeam, rehearsalConfig) : null,
     [liveSnapshot, loadedTeam, rehearsalConfig],
   );
-  const snapshot = rehearsalSnapshot ?? liveSnapshot;
+  const snapshot = activeReplayPack?.snapshot ?? rehearsalSnapshot ?? liveSnapshot;
+  const effectiveDeskSupportPayloads = useMemo(
+    () => ({
+      deskOps: activeReplayPack?.deskOps ?? deskSupportPayloads.deskOps,
+      teamDossier: activeReplayPack?.teamDossier ?? deskSupportPayloads.teamDossier,
+      pickListAnalysis: activeReplayPack?.pickListAnalysis ?? deskSupportPayloads.pickListAnalysis,
+      playoffSummary: activeReplayPack?.playoffSummary ?? deskSupportPayloads.playoffSummary,
+      pitOps: activeReplayPack?.pitOps ?? deskSupportPayloads.pitOps,
+    }),
+    [activeReplayPack, deskSupportPayloads],
+  );
 
   const activePageMeta = PAGE_META[majorTab]?.[tab] ?? PAGE_META.SETTINGS.SETTINGS;
   const language = settings.language ?? 'en';
   const operatorLabel = String(settings.operatorLabel ?? '').trim();
   const freezeAutoRefresh = Boolean(settings.freezeAutoRefresh);
   const deskMode = settings.deskMode ?? 'competition';
+  const queueAlarmStates = settings.queueAlarmStates ?? DEFAULT_SETTINGS.queueAlarmStates;
   const rehearsalModeActive = Boolean(rehearsalConfig.active && rehearsalSnapshot);
+  const pickListPresence = useWorkspacePresence({
+    workspaceKey: activeWorkspaceKey,
+    surface: 'pick_list_editor',
+    artifactId: activePickListId || 'live_picklist',
+    operatorLabel: operatorLabel || null,
+    mode:
+      activePickListId || pickListEntry.trim() || pickListComment.trim() || pickListTag.trim()
+        ? 'editing'
+        : 'viewing',
+    enabled: Boolean(activeWorkspaceKey && loadedEventKey),
+  });
+  const playoffPresence = useWorkspacePresence({
+    workspaceKey: activeWorkspaceKey,
+    surface: 'playoff_lab_editor',
+    artifactId: activePlayoffResultId || activePickListId || 'live_playoff',
+    operatorLabel: operatorLabel || null,
+    mode:
+      activePlayoffResultId ||
+      Object.keys(playoffLabWinners ?? {}).length ||
+      playoffLabSourceId !== 'live'
+        ? 'editing'
+        : 'viewing',
+    enabled: Boolean(activeWorkspaceKey && loadedEventKey),
+  });
   const sourceValidation = snapshot?.validation ?? null;
   const officialSnapshot = snapshot?.official ?? null;
   const nexusSnapshot = snapshot?.nexus ?? null;
@@ -1972,13 +2053,18 @@ export default function HomePage() {
     } catch {
       setRehearsalConfig(DEFAULT_REHEARSAL_MODE_CONFIG);
     }
+    setRehearsalLibrary(loadRehearsalDrills());
+    setWorkspacePresets(loadWorkspacePresets());
+    setRecentSearches(loadRecentSearches());
+    setReplaySessions(loadReplaySessions());
+    setLastKnownGoodPack(getLastKnownGoodDeskPack());
     try {
       const search = new URL(window.location.href).searchParams;
-      if (search.get('pit') === '1') {
+      if (initialPitMode || pitRouteMode || search.get('pit') === '1') {
         setPitModeOpen(true);
       }
     } catch {
-      setPitModeOpen(false);
+      setPitModeOpen(Boolean(initialPitMode || pitRouteMode));
     }
 
     if (restoredEventKey) {
@@ -2069,11 +2155,35 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialPitMode, pitRouteMode]);
   useEffect(() => {
     if (!localSettingsReady) return;
     saveSettings(settings);
   }, [localSettingsReady, settings]);
+  useEffect(() => {
+    const hasUnsavedLocalWork = Boolean(
+      presetName.trim() ||
+      rehearsalDrillName.trim() ||
+      operatorConsoleText.trim() ||
+      pickListEntry.trim() ||
+      pickListComment.trim() ||
+      pickListTag.trim(),
+    );
+    if (!hasUnsavedLocalWork || typeof window === 'undefined') return undefined;
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [
+    operatorConsoleText,
+    pickListComment,
+    pickListEntry,
+    pickListTag,
+    presetName,
+    rehearsalDrillName,
+  ]);
   useEffect(() => {
     if (!localSettingsReady) return;
     if (rehearsalConfig.active) {
@@ -2083,6 +2193,7 @@ export default function HomePage() {
     }
   }, [localSettingsReady, rehearsalConfig]);
   useEffect(() => {
+    if (pitRouteMode) return;
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     if (pitModeOpen) {
@@ -2091,7 +2202,7 @@ export default function HomePage() {
       url.searchParams.delete('pit');
     }
     window.history.replaceState({}, '', url.toString());
-  }, [pitModeOpen]);
+  }, [pitModeOpen, pitRouteMode]);
   useEffect(() => {
     let cancelled = false;
 
@@ -2365,6 +2476,50 @@ export default function HomePage() {
       .catch(() => undefined);
     return response;
   }, []);
+  const warmLikelyNextSurfaces = useCallback(async (teamNumber, eventKey) => {
+    const normalizedTeam = Math.floor(Number(teamNumber));
+    const normalizedEventKey = normalizeEventKey(eventKey);
+    if (!normalizedEventKey || !Number.isFinite(normalizedTeam) || normalizedTeam <= 0) return;
+    try {
+      await fetchJsonOrThrow(
+        '/api/cache-refresh',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            eventKey: normalizedEventKey,
+            team: normalizedTeam,
+            surfaces: LIKELY_NEXT_WARM_SURFACES,
+          }),
+        },
+        'Likely-next warm assist failed',
+      );
+    } catch {
+      // Warm assists are intentionally best-effort.
+    }
+  }, []);
+  const recordRecentTarget = useCallback(
+    (teamNumber, eventKey, option = null) => {
+      const normalizedTeam = Math.floor(Number(teamNumber));
+      const normalizedEventKey = normalizeEventKey(eventKey);
+      if (!normalizedEventKey || !Number.isFinite(normalizedTeam) || normalizedTeam <= 0) return;
+      const recent = saveRecentSearch({
+        eventKey: normalizedEventKey,
+        teamNumber: normalizedTeam,
+        label: `Team ${normalizedTeam} | ${teamEventLabel(option) || normalizedEventKey}`,
+        eventLabel:
+          teamEventLabel(option) ||
+          String(
+            snapshot?.tba?.event?.short_name ?? snapshot?.tba?.event?.name ?? normalizedEventKey,
+          ),
+        matchLabel: null,
+      });
+      setRecentSearches(recent);
+    },
+    [snapshot?.tba?.event?.name, snapshot?.tba?.event?.short_name],
+  );
   const loadDeskTarget = useCallback(
     (
       teamValue,
@@ -2399,6 +2554,7 @@ export default function HomePage() {
       setLoadedEventKey(eventKey);
       setSelectedEventOption(normalizedOption);
       setWarmBundleManifest([]);
+      setActiveReplayPack(null);
       setSettings((prev) => ({
         ...prev,
         teamNumber: team,
@@ -2423,6 +2579,7 @@ export default function HomePage() {
       setLiveAllianceRuntime(null);
       setLiveAlliancePulledAt(null);
       setPlayoffLabWinners({});
+      recordRecentTarget(team, eventKey, normalizedOption);
 
       if (syncShared) {
         void syncSharedActiveTarget(team, eventKey, normalizedOption).catch(() => undefined);
@@ -2447,12 +2604,14 @@ export default function HomePage() {
       fetchSnapshot(team, eventKey, source === 'manual' ? 'manual' : 'auto', {
         preferWarm: preferWarmSnapshot,
       });
+      void warmLikelyNextSurfaces(team, eventKey);
       return true;
     },
     [
       fetchSnapshot,
       loadedEventKey,
       loadedTeam,
+      recordRecentTarget,
       refreshSharedActiveTarget,
       selectedEventOption,
       sendDiscordWebhookEvent,
@@ -2460,6 +2619,7 @@ export default function HomePage() {
       sharedTargetRefreshStatus?.state,
       syncSharedActiveTarget,
       t,
+      warmLikelyNextSurfaces,
     ],
   );
   function handleLoad() {
@@ -2487,6 +2647,159 @@ export default function HomePage() {
     },
     [draftTeam, loadDeskTarget],
   );
+  const openReplayPack = useCallback((pack) => {
+    if (!pack) return;
+    setActiveReplayPack(cloneDashboardValue(pack));
+    setOfflineMode(true);
+    setOfflineAdvance(0);
+    setMajorTab('CURRENT');
+    setCurrentSubTab('NOW');
+    setDraftTeam(pack.teamNumber);
+    setDraftEventKey(pack.eventKey);
+    setLoadedTeam(pack.teamNumber);
+    setLoadedEventKey(pack.eventKey);
+    setSelectedEventOption(
+      normalizeTeamEventCatalogEntry({
+        key: pack.eventKey,
+        name: pack.snapshot?.tba?.event?.name ?? pack.eventKey,
+        shortName: pack.snapshot?.tba?.event?.short_name ?? pack.eventKey,
+        location: pack.snapshot?.tba?.event?.location_name ?? '',
+        startDate: pack.snapshot?.tba?.event?.start_date ?? null,
+        endDate: pack.snapshot?.tba?.event?.end_date ?? null,
+      }),
+    );
+    setErrorText('');
+    setOperatorConsoleText(
+      `Replay mode loaded from ${new Date(pack.capturedAtMs).toLocaleString()}. This view is read-only and local to this browser.`,
+    );
+  }, []);
+  const exitReplayMode = useCallback(() => {
+    setActiveReplayPack(null);
+    setOfflineMode(false);
+    setOfflineAdvance(0);
+    setOperatorConsoleText('Replay mode closed. Returning to the live desk.');
+    if (loadedTeam && loadedEventKey) {
+      preferWarmSnapshotOnNextAutoLoadRef.current = true;
+      fetchSnapshot(loadedTeam, loadedEventKey, 'auto', { preferWarm: true });
+    }
+  }, [fetchSnapshot, loadedEventKey, loadedTeam]);
+  const saveCurrentWorkspacePreset = useCallback(() => {
+    if (!loadedEventKey) return;
+    const next = saveWorkspacePreset({
+      name: presetName,
+      majorTab,
+      currentSubTab,
+      historicalSubTab,
+      predictSubTab,
+      eventKey: loadedEventKey,
+      teamNumber: loadedTeam,
+      selectedMatchKey,
+      selectedTeamNumber,
+      activePickListId,
+      activePlayoffResultId,
+    });
+    setWorkspacePresets(next);
+    setPresetName('');
+    setOperatorConsoleText(`Saved workspace preset for ${loadedEventKey}.`);
+  }, [
+    activePickListId,
+    activePlayoffResultId,
+    currentSubTab,
+    historicalSubTab,
+    loadedEventKey,
+    loadedTeam,
+    majorTab,
+    predictSubTab,
+    presetName,
+    selectedMatchKey,
+    selectedTeamNumber,
+  ]);
+  const applyWorkspacePreset = useCallback(
+    (preset) => {
+      if (!preset) return;
+      setMajorTab(preset.majorTab || 'CURRENT');
+      setCurrentSubTab(preset.currentSubTab || 'NOW');
+      setHistoricalSubTab(preset.historicalSubTab || 'PRE_EVENT');
+      setPredictSubTab(preset.predictSubTab || 'PREDICT');
+      setSelectedMatchKey(preset.selectedMatchKey ?? null);
+      setSelectedTeamNumber(preset.selectedTeamNumber ?? null);
+      setActivePickListId(preset.activePickListId ?? 'live_picklist');
+      setActivePlayoffResultId(preset.activePlayoffResultId ?? '');
+      if (preset.eventKey && preset.teamNumber) {
+        loadDeskTarget(preset.teamNumber, preset.eventKey, {
+          source: 'manual',
+          syncShared: false,
+          preferWarmSnapshot: true,
+        });
+      }
+      setOperatorConsoleText(`Applied preset "${preset.name}".`);
+    },
+    [loadDeskTarget],
+  );
+  const saveCurrentRehearsalDrill = useCallback(() => {
+    const next = saveRehearsalDrill({
+      name: rehearsalDrillName,
+      config: rehearsalConfig,
+    });
+    setRehearsalLibrary(next);
+    setRehearsalDrillName('');
+    setOperatorConsoleText('Saved rehearsal drill locally in this browser.');
+  }, [rehearsalConfig, rehearsalDrillName]);
+  const loadRehearsalDrill = useCallback((drill) => {
+    if (!drill) return;
+    setRehearsalConfig(cloneDashboardValue(drill.config));
+    setOperatorConsoleText(`Loaded rehearsal drill "${drill.name}".`);
+  }, []);
+  const duplicateSavedRehearsalDrill = useCallback((drillId) => {
+    setRehearsalLibrary(duplicateRehearsalDrill(drillId));
+  }, []);
+  const removeSavedRehearsalDrill = useCallback((drillId) => {
+    setRehearsalLibrary(deleteRehearsalDrill(drillId));
+  }, []);
+  const storeCurrentReplaySession = useCallback(() => {
+    if (!lastKnownGoodPack) return;
+    const next = saveReplaySession({
+      label:
+        operatorConsoleText.trim() ||
+        `${lastKnownGoodPack.eventKey} | Team ${lastKnownGoodPack.teamNumber} Replay`,
+      pack: lastKnownGoodPack,
+    });
+    setReplaySessions(next);
+    setOperatorConsoleText('Saved a replay session from the latest healthy pack.');
+  }, [lastKnownGoodPack, operatorConsoleText]);
+  const clearLocalOperatorState = useCallback(() => {
+    clearDeskPacks();
+    clearReplaySessions();
+    setLastKnownGoodPack(null);
+    setReplaySessions([]);
+    setActiveReplayPack(null);
+    setOperatorConsoleText('Cleared local fallback packs and replay sessions.');
+  }, []);
+  const restoreLastHealthyTarget = useCallback(() => {
+    const pack =
+      getLastKnownGoodDeskPack({
+        eventKey: loadedEventKey || null,
+        teamNumber: loadedTeam ?? null,
+      }) ?? lastKnownGoodPack;
+    if (!pack) return;
+    setLastKnownGoodPack(pack);
+    setActiveReplayPack(null);
+    setOfflineMode(false);
+    loadDeskTarget(pack.teamNumber, pack.eventKey, {
+      source: 'manual',
+      syncShared: true,
+      preferWarmSnapshot: true,
+      option: normalizeTeamEventCatalogEntry({
+        key: pack.eventKey,
+        name: pack.snapshot?.tba?.event?.name ?? pack.eventKey,
+        shortName: pack.snapshot?.tba?.event?.short_name ?? pack.eventKey,
+        location: pack.snapshot?.tba?.event?.location_name ?? '',
+        startDate: pack.snapshot?.tba?.event?.start_date ?? null,
+        endDate: pack.snapshot?.tba?.event?.end_date ?? null,
+      }),
+    });
+    setOperatorConsoleText('Restored the last healthy shared target and reseeded the desk.');
+  }, [lastKnownGoodPack, loadDeskTarget, loadedEventKey, loadedTeam]);
   useEffect(() => {
     const query = String(draftEventKey || '').trim();
     const teamNumber = Math.floor(Number(draftTeam));
@@ -2575,6 +2888,133 @@ export default function HomePage() {
     settings.pollMs,
     freezeAutoRefresh,
     rehearsalModeActive,
+  ]);
+  useEffect(() => {
+    if (!loadedTeam || !loadedEventKey || replayModeActive) {
+      setDeskSupportPayloads({
+        deskOps: null,
+        teamDossier: null,
+        pickListAnalysis: null,
+        playoffSummary: null,
+        pitOps: null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    async function loadDeskSupportPayloads() {
+      const common = new URLSearchParams({
+        eventKey: loadedEventKey,
+        team: String(loadedTeam),
+      });
+      const pickListParams = new URLSearchParams(common);
+      if (activePickListId) pickListParams.set('activePickListId', activePickListId);
+      const playoffParams = new URLSearchParams(common);
+      if (activePlayoffResultId) playoffParams.set('activeScenarioId', activePlayoffResultId);
+
+      const entries = await Promise.allSettled([
+        fetchJsonOrThrow(
+          `/api/desk-ops?${common.toString()}`,
+          { cache: 'default' },
+          'Desk ops support failed',
+        ),
+        fetchJsonOrThrow(
+          `/api/team-dossier?${common.toString()}`,
+          { cache: 'default' },
+          'Team dossier support failed',
+        ),
+        fetchJsonOrThrow(
+          `/api/pick-list-analysis?${pickListParams.toString()}`,
+          { cache: 'default' },
+          'Pick-list analysis support failed',
+        ),
+        fetchJsonOrThrow(
+          `/api/playoff-summary?${playoffParams.toString()}`,
+          { cache: 'default' },
+          'Playoff summary support failed',
+        ),
+        fetchJsonOrThrow(
+          `/api/pit-ops?${common.toString()}`,
+          { cache: 'default' },
+          'Pit mode support failed',
+        ),
+      ]);
+      if (cancelled) return;
+      setDeskSupportPayloads({
+        deskOps: entries[0].status === 'fulfilled' ? entries[0].value : null,
+        teamDossier: entries[1].status === 'fulfilled' ? entries[1].value : null,
+        pickListAnalysis: entries[2].status === 'fulfilled' ? entries[2].value : null,
+        playoffSummary: entries[3].status === 'fulfilled' ? entries[3].value : null,
+        pitOps: entries[4].status === 'fulfilled' ? entries[4].value : null,
+      });
+    }
+
+    void loadDeskSupportPayloads();
+    const id = window.setInterval(() => {
+      void loadDeskSupportPayloads();
+    }, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    activePickListId,
+    activePlayoffResultId,
+    bundleStatusSyncKey,
+    loadedEventKey,
+    loadedTeam,
+    replayModeActive,
+  ]);
+  useEffect(() => {
+    if (
+      !activeWorkspaceKey ||
+      !loadedEventKey ||
+      !loadedTeam ||
+      !snapshot ||
+      replayModeActive ||
+      rehearsalModeActive
+    ) {
+      return;
+    }
+    const pack = {
+      id: `deskpack_${activeWorkspaceKey}_${loadedEventKey}_${loadedTeam}`,
+      workspaceKey: activeWorkspaceKey,
+      eventKey: loadedEventKey,
+      teamNumber: loadedTeam,
+      label:
+        `${snapshot?.tba?.event?.short_name ?? snapshot?.tba?.event?.name ?? loadedEventKey} | Team ${loadedTeam}`.trim(),
+      capturedAtMs: Date.now(),
+      snapshot: cloneDashboardValue(snapshot),
+      deskOps: effectiveDeskSupportPayloads.deskOps
+        ? cloneDashboardValue(effectiveDeskSupportPayloads.deskOps)
+        : null,
+      teamDossier: effectiveDeskSupportPayloads.teamDossier
+        ? cloneDashboardValue(effectiveDeskSupportPayloads.teamDossier)
+        : null,
+      pickListAnalysis: effectiveDeskSupportPayloads.pickListAnalysis
+        ? cloneDashboardValue(effectiveDeskSupportPayloads.pickListAnalysis)
+        : null,
+      playoffSummary: effectiveDeskSupportPayloads.playoffSummary
+        ? cloneDashboardValue(effectiveDeskSupportPayloads.playoffSummary)
+        : null,
+      pitOps: effectiveDeskSupportPayloads.pitOps
+        ? cloneDashboardValue(effectiveDeskSupportPayloads.pitOps)
+        : null,
+    };
+    const nextPacks = saveDeskPack(pack);
+    setLastKnownGoodPack(nextPacks[0] ?? pack);
+  }, [
+    activeWorkspaceKey,
+    effectiveDeskSupportPayloads.deskOps,
+    effectiveDeskSupportPayloads.pickListAnalysis,
+    effectiveDeskSupportPayloads.pitOps,
+    effectiveDeskSupportPayloads.playoffSummary,
+    effectiveDeskSupportPayloads.teamDossier,
+    loadedEventKey,
+    loadedTeam,
+    rehearsalModeActive,
+    replayModeActive,
+    snapshot,
   ]);
   useEffect(() => {
     if (!activeWorkspaceKey || !loadedEventKey || !isSupabaseConfigured()) return;
@@ -2971,8 +3411,17 @@ export default function HomePage() {
     const previous = previousQueueStateRef.current;
     previousQueueStateRef.current = queueState;
     if (previous == null || previous === queueState || queueState === 'NONE') return;
-    if (audioEnabled) {
+    const queueAlertsEnabled = Boolean(queueAlarmStates?.[queueState]);
+    if (audioEnabled && queueAlertsEnabled) {
       void playAudioPattern(queueState);
+    }
+    if (queueAlertsEnabled) {
+      const matchLabel = livePointers.ourNextMatch
+        ? formatMatchLabel(livePointers.ourNextMatch)
+        : '-';
+      setQueueAlertActive(true);
+      setQueueAlertText(`${queueState.replace('_', ' ')} alert: ${matchLabel}`);
+      window.setTimeout(() => setQueueAlertActive(false), 12_000);
     }
 
     const eventKey = queueState === 'PLAYING_NOW' ? 'playing_now' : queueState.toLowerCase();
@@ -2990,6 +3439,7 @@ export default function HomePage() {
     livePointers.ourNextMatch,
     loadedTeam,
     playAudioPattern,
+    queueAlarmStates,
     queueState,
     sendDiscordWebhookEvent,
     t,
@@ -5394,6 +5844,157 @@ export default function HomePage() {
       </header>
     );
   }
+  function renderModeRail() {
+    if (pitRouteMode) return null;
+    const recentButtons = recentSearches.slice(0, deskMode === 'competition' ? 4 : 6);
+    const presetButtons = workspacePresets.slice(0, deskMode === 'competition' ? 3 : 5);
+    if (deskMode === 'competition') {
+      return (
+        <section className="dashboard-mode-rail dashboard-mode-rail-competition panel">
+          <div className="dashboard-mode-rail-header">
+            <div>
+              <div className="dashboard-mode-rail-kicker">Competition Mode</div>
+              <div className="dashboard-mode-rail-title">
+                Queue, pit, and the next actions stay loud.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {queueState !== 'NONE' ? (
+                <span className={`badge ${queueAlertActive ? 'badge-yellow' : 'badge-blue'}`}>
+                  {queueState.replace('_', ' ')}
+                </span>
+              ) : null}
+              {livePointers.matchesAway != null ? (
+                <span className="badge">Matches Away {livePointers.matchesAway}</span>
+              ) : null}
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => setPitModeOpen(true)}
+              >
+                Open PIT
+              </button>
+            </div>
+          </div>
+          <div className="dashboard-mode-rail-grid">
+            <div className="panel-2" style={{ padding: 12 }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Next Match
+              </div>
+              <div style={{ fontWeight: 900, marginTop: 6 }}>
+                {livePointers.ourNextMatch
+                  ? formatMatchLabel(livePointers.ourNextMatch)
+                  : 'Waiting'}
+              </div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                {queueAlertText || 'Queue thresholds and pit handoff actions stay visible here.'}
+              </div>
+            </div>
+            <div className="panel-2" style={{ padding: 12 }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Recent Targets
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {recentButtons.map((entry) => (
+                  <button
+                    key={entry.id}
+                    className="button button-subtle"
+                    type="button"
+                    onClick={() =>
+                      loadDeskTarget(entry.teamNumber, entry.eventKey, {
+                        source: 'manual',
+                        syncShared: true,
+                        preferWarmSnapshot: true,
+                      })
+                    }
+                  >
+                    {entry.teamNumber} | {entry.eventLabel}
+                  </button>
+                ))}
+                {!recentButtons.length ? (
+                  <span className="muted">Recent targets will appear here.</span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="dashboard-mode-rail dashboard-mode-rail-analyst panel">
+        <div className="dashboard-mode-rail-header">
+          <div>
+            <div className="dashboard-mode-rail-kicker">Analyst Mode</div>
+            <div className="dashboard-mode-rail-title">
+              Presets, notebook flow, replay, and recent context stay close.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {replayModeActive ? <span className="badge badge-yellow">Replay Active</span> : null}
+            {rehearsalModeActive ? (
+              <span className="badge badge-blue">Rehearsal Active</span>
+            ) : null}
+            {operatorLabel ? <span className="badge">Operator {operatorLabel}</span> : null}
+          </div>
+        </div>
+        <div className="dashboard-mode-rail-grid">
+          <div className="panel-2" style={{ padding: 12 }}>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Workspace Presets
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {presetButtons.map((preset) => (
+                <button
+                  key={preset.id}
+                  className="button button-subtle"
+                  type="button"
+                  onClick={() => applyWorkspacePreset(preset)}
+                >
+                  {preset.name}
+                </button>
+              ))}
+              {!presetButtons.length ? (
+                <span className="muted">Save presets from Settings to reuse them here.</span>
+              ) : null}
+            </div>
+          </div>
+          <div className="panel-2" style={{ padding: 12 }}>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Recent Targets + Replay
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {recentButtons.map((entry) => (
+                <button
+                  key={entry.id}
+                  className="button button-subtle"
+                  type="button"
+                  onClick={() =>
+                    loadDeskTarget(entry.teamNumber, entry.eventKey, {
+                      source: 'manual',
+                      syncShared: true,
+                      preferWarmSnapshot: true,
+                    })
+                  }
+                >
+                  {entry.label}
+                </button>
+              ))}
+              {lastKnownGoodPack ? (
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => openReplayPack(lastKnownGoodPack)}
+                >
+                  Open Last Good Pack
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
   function renderTopControls() {
     const normalizedLoadedEventKey = normalizeEventKey(loadedEventKey);
     const lastUpdateMs =
@@ -6325,6 +6926,7 @@ export default function HomePage() {
           currentMatchKey={livePointers.ourNextMatch?.key ?? null}
           operatorLabel={operatorLabel}
           externalUpdateKey={bundleStatusSyncKey + liveSignals.length}
+          responseOverride={replayModeActive ? effectiveDeskSupportPayloads.deskOps : null}
         />
       </div>
     );
@@ -9309,11 +9911,35 @@ export default function HomePage() {
     };
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
+        <div className="panel" style={{ padding: 12 }}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}
+          >
+            <div>
+              <div style={{ fontWeight: 900 }}>Playoff Lab Collaboration</div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                Presence is advisory only. Saves stay last-write-wins, but this helps operators
+                avoid colliding on the same playoff scenario.
+              </div>
+            </div>
+            <WorkspacePresencePills
+              entries={playoffPresence.otherEntries}
+              compact
+              emptyLabel="No other playoff editors"
+            />
+          </div>
+          {playoffPresence.hasConflict ? (
+            <div className="badge badge-yellow" style={{ marginTop: 10 }}>
+              Another operator is actively editing this playoff surface.
+            </div>
+          ) : null}
+        </div>
         <PlayoffSummaryPanel
           eventKey={loadedEventKey}
           teamNumber={loadedTeam}
           activeScenarioId={activePlayoffResultId}
           externalUpdateKey={bundleStatusSyncKey + savedPlayoffResults.length + allianceLiveLocked}
+          summaryOverride={replayModeActive ? effectiveDeskSupportPayloads.playoffSummary : null}
         />
         <div className="panel" style={{ padding: 16 }}>
           <div
@@ -9662,11 +10288,35 @@ export default function HomePage() {
     ];
     return (
       <div className="stack-12" style={{ marginTop: 12 }}>
+        <div className="panel" style={{ padding: 12 }}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}
+          >
+            <div>
+              <div style={{ fontWeight: 900 }}>Pick List Collaboration</div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                Presence is advisory only. Use it to spot overlapping edits before
+                alliance-selection changes land.
+              </div>
+            </div>
+            <WorkspacePresencePills
+              entries={pickListPresence.otherEntries}
+              compact
+              emptyLabel="No other pick-list editors"
+            />
+          </div>
+          {pickListPresence.hasConflict ? (
+            <div className="badge badge-yellow" style={{ marginTop: 10 }}>
+              Another operator is editing this pick list right now.
+            </div>
+          ) : null}
+        </div>
         <PickListAnalysisPanel
           eventKey={loadedEventKey}
           teamNumber={loadedTeam}
           activePickListId={activePickListId}
           externalUpdateKey={bundleStatusSyncKey + pickLists.length + savedPlayoffResults.length}
+          analysisOverride={replayModeActive ? effectiveDeskSupportPayloads.pickListAnalysis : null}
         />
         <div className="panel" style={{ padding: 16 }}>
           <div
@@ -10756,6 +11406,7 @@ export default function HomePage() {
         onAddToCompare={addTeamToCompare}
         scope={scope}
         externalUpdateKey={bundleStatusSyncKey}
+        dossierOverride={replayModeActive ? effectiveDeskSupportPayloads.teamDossier : null}
       />
     );
   }
@@ -10765,6 +11416,8 @@ export default function HomePage() {
         loadedEventKey={loadedEventKey}
         loadedTeam={loadedTeam}
         eventTeamRows={eventTeamRows}
+        recentSearches={recentSearches}
+        operatorLabel={operatorLabel}
         externalUpdateKey={
           (scope === 'historical' ? historicalCompareSyncKey : currentCompareSyncKey) +
           bundleStatusSyncKey
@@ -10884,6 +11537,38 @@ export default function HomePage() {
                       {t('field.test_audio', 'Test Audio')}
                     </button>
                   </div>
+                </div>
+              </div>
+              <div className="panel-2" style={{ padding: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 8 }}>Queue Alarm Thresholds</div>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  Choose which queue states should fire the bright on-screen alert and optional
+                  browser audio.
+                </div>
+                <div className="grid-2">
+                  {[
+                    ['QUEUE_5', 'Queue 5'],
+                    ['QUEUE_2', 'Queue 2'],
+                    ['QUEUE_1', 'Queue 1'],
+                    ['PLAYING_NOW', 'Playing Now'],
+                  ].map(([key, label]) => (
+                    <label key={key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(queueAlarmStates[key])}
+                        onChange={(event) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            queueAlarmStates: {
+                              ...(prev.queueAlarmStates ?? DEFAULT_SETTINGS.queueAlarmStates),
+                              [key]: event.target.checked,
+                            },
+                          }))
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
                 </div>
               </div>
               <div className="grid-2">
@@ -11398,6 +12083,74 @@ export default function HomePage() {
               Rehearsal mode is session-local only. It never writes fake state back into the shared
               desk.
             </div>
+            <div className="panel-2" style={{ padding: 12, marginTop: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Saved Drill Library</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                <input
+                  className="input"
+                  value={rehearsalDrillName}
+                  onChange={(event) => setRehearsalDrillName(event.target.value)}
+                  placeholder="Practice pits / Queue drill / Finals handoff"
+                />
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={saveCurrentRehearsalDrill}
+                >
+                  Save Drill
+                </button>
+              </div>
+              <div className="stack-8">
+                {rehearsalLibrary.map((drill) => (
+                  <div key={drill.id} className="panel" style={{ padding: 10 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 800 }}>{drill.name}</div>
+                        <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                          Updated {new Date(drill.updatedAtMs).toLocaleString()}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          className="button"
+                          type="button"
+                          onClick={() => loadRehearsalDrill(drill)}
+                        >
+                          Load
+                        </button>
+                        <button
+                          className="button"
+                          type="button"
+                          onClick={() => duplicateSavedRehearsalDrill(drill.id)}
+                        >
+                          Duplicate
+                        </button>
+                        <button
+                          className="button"
+                          type="button"
+                          onClick={() => removeSavedRehearsalDrill(drill.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {!rehearsalLibrary.length ? (
+                  <div className="muted">
+                    Save repeatable drills here so this browser can rehearse the same flow quickly
+                    before an event day.
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
           <div className="panel" style={{ padding: 16 }}>
             <div style={{ fontWeight: 900, marginBottom: 10 }}>Finish-Line Operator Notes</div>
@@ -11424,6 +12177,210 @@ export default function HomePage() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+        <div className="grid-2">
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Local Recovery + Replay</div>
+            <div className="muted" style={{ marginBottom: 12 }}>
+              Keep a browser-local last-known-good desk pack, restore the shared target quickly, and
+              open read-only replay sessions without touching the live workspace.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={restoreLastHealthyTarget}
+              >
+                Restore Last Healthy Target
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={storeCurrentReplaySession}
+                disabled={!lastKnownGoodPack}
+              >
+                Save Replay Session
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={() => openReplayPack(lastKnownGoodPack)}
+                disabled={!lastKnownGoodPack}
+              >
+                Open Last Good Pack
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={exitReplayMode}
+                disabled={!replayModeActive}
+              >
+                Exit Replay
+              </button>
+              <button className="button" type="button" onClick={clearLocalOperatorState}>
+                Clear Local Packs
+              </button>
+            </div>
+            <div className="panel-2" style={{ padding: 12, marginBottom: 12 }}>
+              <div style={{ fontWeight: 800 }}>Latest Healthy Pack</div>
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                {lastKnownGoodPack
+                  ? `${lastKnownGoodPack.label} | Captured ${new Date(lastKnownGoodPack.capturedAtMs).toLocaleString()}`
+                  : 'A healthy desk pack will appear here after the live desk settles on an event + team.'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => void refreshSharedActiveTarget()}
+                  disabled={!loadedEventKey || !loadedTeam}
+                >
+                  Reseed Warm Bootstrap
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => void warmLikelyNextSurfaces(loadedTeam, loadedEventKey)}
+                  disabled={!loadedEventKey || !loadedTeam}
+                >
+                  Force Key Warm Surfaces
+                </button>
+              </div>
+            </div>
+            <div className="stack-8">
+              {replaySessions.map((session) => (
+                <div key={session.id} className="panel-2" style={{ padding: 10 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 800 }}>{session.label}</div>
+                      <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                        {session.eventKey} | Team {session.teamNumber} |{' '}
+                        {new Date(session.createdAtMs).toLocaleString()}
+                      </div>
+                    </div>
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => openReplayPack(session.pack)}
+                    >
+                      Open Replay
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!replaySessions.length ? (
+                <div className="muted">Saved replay sessions will appear here.</div>
+              ) : null}
+            </div>
+          </div>
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Presets + Recent Targets</div>
+            <div className="muted" style={{ marginBottom: 12 }}>
+              Save the current workspace view, reopen common event-day layouts quickly, and reuse
+              recent targets without retyping.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <input
+                className="input"
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+                placeholder="Captain meeting / Match prep / Analyst review"
+              />
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={saveCurrentWorkspacePreset}
+                disabled={!loadedEventKey}
+              >
+                Save Preset
+              </button>
+            </div>
+            <div className="stack-8" style={{ marginBottom: 12 }}>
+              {workspacePresets.map((preset) => (
+                <div key={preset.id} className="panel-2" style={{ padding: 10 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 800 }}>{preset.name}</div>
+                      <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                        {preset.majorTab} /{' '}
+                        {preset.currentSubTab || preset.historicalSubTab || preset.predictSubTab} |{' '}
+                        {preset.eventKey} | Team {preset.teamNumber ?? '-'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => applyWorkspacePreset(preset)}
+                      >
+                        Apply
+                      </button>
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => setWorkspacePresets(deleteWorkspacePreset(preset.id))}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!workspacePresets.length ? (
+                <div className="muted">Save a preset once you have a favorite desk layout.</div>
+              ) : null}
+            </div>
+            <div className="panel-2" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Recent Targets</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {recentSearches.map((entry) => (
+                  <button
+                    key={entry.id}
+                    className="button button-subtle"
+                    type="button"
+                    onClick={() =>
+                      loadDeskTarget(entry.teamNumber, entry.eventKey, {
+                        source: 'manual',
+                        syncShared: true,
+                        preferWarmSnapshot: true,
+                      })
+                    }
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+                {!recentSearches.length ? (
+                  <span className="muted">Recent searches will populate here automatically.</span>
+                ) : null}
+              </div>
+            </div>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Operator Console Notes
+              </span>
+              <textarea
+                className="input"
+                rows={4}
+                value={operatorConsoleText}
+                onChange={(event) => setOperatorConsoleText(event.target.value)}
+                placeholder="Local reminders for this browser: what to restore, what to practice next, which preset to use before alliance selection, etc."
+              />
+            </label>
           </div>
         </div>
         <div className="stack-12">
@@ -11784,9 +12741,22 @@ export default function HomePage() {
     <span key="desk_mode" className="badge">
       {deskMode === 'competition' ? 'Competition Mode' : 'Analyst Mode'}
     </span>,
+    queueState !== 'NONE' && queueAlarmStates?.[queueState] ? (
+      <span
+        key="queue_alarm"
+        className={`badge ${queueAlertActive ? 'badge-yellow' : 'badge-blue'}`}
+      >
+        {queueState.replace('_', ' ')}
+      </span>
+    ) : null,
     rehearsalModeActive ? (
       <span key="rehearsal" className="badge badge-yellow">
         Rehearsal Mode
+      </span>
+    ) : null,
+    replayModeActive ? (
+      <span key="replay" className="badge badge-red">
+        Replay Mode
       </span>
     ) : null,
     freezeAutoRefresh ? (
@@ -11820,69 +12790,102 @@ export default function HomePage() {
   ];
   return (
     <DashboardPreferencesProvider language={language}>
-      <main className="app-shell">
-        <div className="dashboard-layout">
-          {renderTabs()}
-          <div className="dashboard-main">
-            {renderTopControls()}
-            {renderCommandPalette()}
-            <PitModeOverlay
-              open={pitModeOpen}
-              onClose={() => setPitModeOpen(false)}
-              workspaceKey={activeWorkspaceKey}
-              eventKey={loadedEventKey}
-              teamNumber={loadedTeam}
-              snapshotOverride={rehearsalModeActive ? rehearsalSnapshot : null}
-              externalUpdateKey={bundleStatusSyncKey + liveSignals.length}
-            />
-            {showFloatingWebcast ? (
-              <div className="webcast-floating-shell">
-                <button
-                  className="button webcast-floating-dismiss"
-                  type="button"
-                  aria-label="Exit PiP"
-                  onClick={handleFloatingWebcastClose}
-                >
-                  X
-                </button>
-                <div className="panel webcast-floating-card">
-                  <YouTubeWebcastPlayer
-                    key={`floating-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
-                    webcast={preferredYouTubeWebcast}
-                    eventKey={loadedEventKey}
-                    eventName={currentEventName}
-                    variant="floating"
-                    initialTimeSeconds={webcastPlayerState.currentTime}
-                    shouldAutoplay={
-                      (webcastPlaybackContinuing || webcastPlayerState.floatingVisible) &&
-                      !webcastPlaybackSuppressed
-                    }
-                    onSnapshotChange={handleWebcastSnapshotChange}
-                  />
+      {pitRouteMode ? (
+        <main className="app-shell app-shell-pit-route">
+          <PitModeOverlay
+            open
+            onClose={() => {
+              if (typeof window !== 'undefined') {
+                window.location.assign('/');
+              }
+            }}
+            workspaceKey={activeWorkspaceKey}
+            eventKey={loadedEventKey}
+            teamNumber={loadedTeam}
+            snapshotOverride={
+              replayModeActive
+                ? activeReplayPack?.snapshot
+                : rehearsalModeActive
+                  ? rehearsalSnapshot
+                  : null
+            }
+            externalUpdateKey={bundleStatusSyncKey + liveSignals.length}
+            payloadOverride={replayModeActive ? effectiveDeskSupportPayloads.pitOps : null}
+          />
+        </main>
+      ) : (
+        <main className="app-shell">
+          <div className={`dashboard-layout dashboard-layout-mode-${deskMode}`}>
+            {renderTabs()}
+            <div className="dashboard-main">
+              {renderTopControls()}
+              {renderModeRail()}
+              {renderCommandPalette()}
+              <PitModeOverlay
+                open={pitModeOpen}
+                onClose={() => setPitModeOpen(false)}
+                workspaceKey={activeWorkspaceKey}
+                eventKey={loadedEventKey}
+                teamNumber={loadedTeam}
+                snapshotOverride={
+                  replayModeActive
+                    ? activeReplayPack?.snapshot
+                    : rehearsalModeActive
+                      ? rehearsalSnapshot
+                      : null
+                }
+                externalUpdateKey={bundleStatusSyncKey + liveSignals.length}
+                payloadOverride={replayModeActive ? effectiveDeskSupportPayloads.pitOps : null}
+              />
+              {showFloatingWebcast ? (
+                <div className="webcast-floating-shell">
+                  <button
+                    className="button webcast-floating-dismiss"
+                    type="button"
+                    aria-label="Exit PiP"
+                    onClick={handleFloatingWebcastClose}
+                  >
+                    X
+                  </button>
+                  <div className="panel webcast-floating-card">
+                    <YouTubeWebcastPlayer
+                      key={`floating-webcast-${loadedEventKey}-${preferredYouTubeVideoId}`}
+                      webcast={preferredYouTubeWebcast}
+                      eventKey={loadedEventKey}
+                      eventName={currentEventName}
+                      variant="floating"
+                      initialTimeSeconds={webcastPlayerState.currentTime}
+                      shouldAutoplay={
+                        (webcastPlaybackContinuing || webcastPlayerState.floatingVisible) &&
+                        !webcastPlaybackSuppressed
+                      }
+                      onSnapshotChange={handleWebcastSnapshotChange}
+                    />
+                  </div>
                 </div>
-              </div>
-            ) : null}
-            <div className="dashboard-content">
-              <div className="dashboard-page">
-                <PageHeader
-                  eyebrow={localizedPageMeta.eyebrow}
-                  title={localizedPageMeta.title}
-                  description={localizedPageMeta.description}
-                  templateLabel={localizedPageMeta.template}
-                  statusItems={pageHeaderStatus}
-                />
-                <div
-                  className={`dashboard-page-view page-template-${String(
-                    activePageMeta.template ?? 'workbench',
-                  ).toLowerCase()}`}
-                >
-                  {renderActiveContent()}
+              ) : null}
+              <div className="dashboard-content">
+                <div className="dashboard-page">
+                  <PageHeader
+                    eyebrow={localizedPageMeta.eyebrow}
+                    title={localizedPageMeta.title}
+                    description={localizedPageMeta.description}
+                    templateLabel={localizedPageMeta.template}
+                    statusItems={pageHeaderStatus}
+                  />
+                  <div
+                    className={`dashboard-page-view page-template-${String(
+                      activePageMeta.template ?? 'workbench',
+                    ).toLowerCase()}`}
+                  >
+                    {renderActiveContent()}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </main>
+        </main>
+      )}
     </DashboardPreferencesProvider>
   );
 }

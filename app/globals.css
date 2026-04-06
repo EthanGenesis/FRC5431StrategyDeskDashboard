@@ -671,6 +671,76 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+.dashboard-layout-mode-competition .dashboard-productbar,
+.dashboard-layout-mode-competition .dashboard-topbar {
+  border-color: rgba(233, 195, 109, 0.16);
+}
+
+.dashboard-layout-mode-competition .page-header-title {
+  font-size: clamp(20px, 2.4vw, 28px);
+}
+
+.dashboard-layout-mode-analyst .dashboard-page-view {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-layout-mode-analyst .dashboard-page-view > .stack-12,
+.dashboard-layout-mode-analyst .dashboard-page-view > .stack-16 {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-mode-rail {
+  padding: 12px;
+}
+
+.dashboard-mode-rail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.dashboard-mode-rail-kicker {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dashboard-mode-rail-title {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.dashboard-mode-rail-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-layout-mode-competition .dashboard-mode-rail {
+  border-color: rgba(233, 195, 109, 0.18);
+  background:
+    linear-gradient(135deg, rgba(233, 195, 109, 0.06), rgba(103, 210, 238, 0.03)), var(--surface-1);
+}
+
+.dashboard-layout-mode-analyst .dashboard-mode-rail {
+  border-color: rgba(103, 210, 238, 0.12);
+  background:
+    linear-gradient(135deg, rgba(103, 210, 238, 0.05), rgba(192, 132, 252, 0.04)), var(--surface-1);
+}
+
+.app-shell-pit-route {
+  min-height: 100vh;
+}
+
 .dashboard-topbar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

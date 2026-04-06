@@ -4,7 +4,7 @@ import {
   buildSnapshotHotCacheKey,
   buildUpstreamHotCacheKey,
 } from './hot-cache-keys';
-import { loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
+import { deleteHotCacheKey, loadHotCacheJson, saveHotCacheJson } from './hot-cache-server';
 import {
   markPersistenceFailure,
   markPersistenceSuccess,
@@ -351,6 +351,35 @@ export async function loadSnapshotCacheRecord<T>(
       detail: error instanceof Error ? error.message : 'Unknown snapshot cache read error',
     });
     return null;
+  }
+}
+
+export async function deleteSnapshotCacheRecord(
+  source: CacheSource,
+  eventKey: string | null,
+  teamNumber: number | null,
+): Promise<void> {
+  const hotCacheKey = buildSnapshotHotCacheKey(source, eventKey, teamNumber);
+  await deleteHotCacheKey(hotCacheKey).catch(() => null);
+
+  const { client: admin } = getAdminClient();
+  if (!admin) return;
+
+  const cacheKey = [source, eventKey ?? 'none', teamNumber ?? 'none'].join('::');
+  try {
+    await withTimeout(
+      admin.from(PERSISTENCE_TABLES.snapshotCache).delete().eq('cache_key', cacheKey),
+      `delete snapshot cache for ${cacheKey}`,
+    );
+    markPersistenceSuccess(SOURCE_CACHE_SCOPE);
+  } catch (error) {
+    markPersistenceFailure(SOURCE_CACHE_SCOPE);
+    logPersistenceEvent('warn', 'snapshot_cache_delete_failed', {
+      source,
+      eventKey,
+      teamNumber,
+      detail: error instanceof Error ? error.message : 'Unknown snapshot cache delete error',
+    });
   }
 }
 

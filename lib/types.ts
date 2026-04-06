@@ -253,6 +253,8 @@ export type WebhookSettings = {
 
 export type DeskMode = 'competition' | 'analyst';
 
+export type QueueAlarmPreferenceKey = 'QUEUE_5' | 'QUEUE_2' | 'QUEUE_1' | 'PLAYING_NOW';
+
 export type SettingsState = {
   teamNumber: number;
   eventKey: string;
@@ -270,6 +272,7 @@ export type SettingsState = {
   operatorLabel: string;
   freezeAutoRefresh: boolean;
   deskMode: DeskMode;
+  queueAlarmStates: Record<QueueAlarmPreferenceKey, boolean>;
 };
 
 export type WorkspaceNoteScope = 'event' | 'team' | 'match';

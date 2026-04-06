@@ -22,7 +22,10 @@ import {
   saveCompareDraftForScope,
   saveCompareSetsShared,
 } from '../lib/shared-workspace-browser';
+import { rankCompareSuggestions } from '../lib/operator-local-tools';
+import { useWorkspacePresence } from '../lib/use-workspace-presence';
 import { getEventWorkspaceKey } from '../lib/workspace-key';
+import WorkspacePresencePills from './ui/WorkspacePresencePills';
 function uniqNumbers(values) {
   return Array.from(
     new Set(
@@ -79,6 +82,8 @@ export default function CompareTab({
   externalUpdateKey = 0,
   onOpenTeamProfile,
   scope = 'current',
+  recentSearches = [],
+  operatorLabel = '',
 }) {
   const { language, t, toneClass, toneFromDelta } = useDashboardPreferences();
   const initializedRef = useRef(false);
@@ -94,6 +99,17 @@ export default function CompareTab({
   const [storageWorkspaceKey, setStorageWorkspaceKey] = useState(null);
   const workspaceKey = useMemo(() => getEventWorkspaceKey(loadedEventKey), [loadedEventKey]);
   const selectedTeamNumbers = useMemo(() => draft.teamNumbers ?? [], [draft.teamNumbers]);
+  const comparePresence = useWorkspacePresence({
+    workspaceKey,
+    surface: scope === 'historical' ? 'historical_compare' : 'current_compare',
+    artifactId: activeSetId || `draft_${selectedTeamNumbers.join('_') || 'empty'}`,
+    operatorLabel: operatorLabel || null,
+    mode:
+      activeSetId || addInput.trim() || eventTeamPick || (draft.note ?? '').trim()
+        ? 'editing'
+        : 'viewing',
+    enabled: Boolean(workspaceKey && loadedEventKey),
+  });
   const normalizeDraftForScope = useCallback(
     (baseDraft) => {
       const next = { ...DEFAULT_COMPARE_DRAFT, ...(baseDraft ?? {}) };
@@ -309,6 +325,16 @@ export default function CompareTab({
       ),
     [eventTeamRows],
   );
+  const quickSuggestions = useMemo(
+    () =>
+      rankCompareSuggestions({
+        eventTeamRows,
+        recentSearches,
+        selectedTeams: selectedTeamNumbers,
+        loadedTeam,
+      }),
+    [eventTeamRows, loadedTeam, recentSearches, selectedTeamNumbers],
+  );
   const scopeFilters = useMemo(
     () =>
       scope === 'current'
@@ -437,6 +463,14 @@ export default function CompareTab({
     }));
     setEventTeamPick('');
   }
+  function addQuickSuggestion(teamNumber) {
+    const normalized = Math.floor(Number(teamNumber));
+    if (!Number.isFinite(normalized) || normalized <= 0) return;
+    updateDraft((prev) => ({
+      ...prev,
+      teamNumbers: uniqNumbers([...(prev.teamNumbers ?? []), normalized]),
+    }));
+  }
   function removeTeam(teamNumber) {
     updateDraft((prev) => ({
       ...prev,
@@ -499,6 +533,33 @@ export default function CompareTab({
   return (
     <div className="stack-12" style={{ marginTop: 12 }}>
       <div className="panel" style={{ padding: 16 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginBottom: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900 }}>Compare Setup</div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Use recent targets, current contenders, or saved compare sets to build the
+              side-by-side view faster.
+            </div>
+          </div>
+          <WorkspacePresencePills
+            entries={comparePresence.otherEntries}
+            compact
+            emptyLabel="No other compare viewers"
+          />
+        </div>
+        {comparePresence.hasConflict ? (
+          <div className="badge badge-yellow" style={{ marginBottom: 10 }}>
+            Another operator is editing this compare surface. Saves stay last-write-wins.
+          </div>
+        ) : null}
         <div
           style={{
             display: 'flex',
@@ -584,6 +645,23 @@ export default function CompareTab({
           {errorText ? <span className="badge badge-red">{errorText}</span> : null}
         </div>
         <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {quickSuggestions.map((row) => (
+            <button
+              key={row.teamKey}
+              className="button button-subtle"
+              type="button"
+              onClick={() => addQuickSuggestion(row.teamNumber)}
+            >
+              Add {row.teamNumber} {row.nickname || row.teamKey}
+            </button>
+          ))}
+          {!quickSuggestions.length ? (
+            <span className="muted">
+              Recent targets and likely contenders will surface here automatically.
+            </span>
+          ) : null}
+        </div>
+        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {selectedTeamNumbers.map((teamNumber) => (
             <button key={teamNumber} className="button" onClick={() => removeTeam(teamNumber)}>
               Remove {teamNumber}
@@ -611,7 +689,12 @@ export default function CompareTab({
         }
       >
         {!compareTeams.length ? (
-          <div className="muted">{t('compare.add_to_start', 'Add teams to start comparing.')}</div>
+          <div className="muted">
+            {t(
+              'compare.add_to_start',
+              'Add teams to start comparing. Quick suggestions above use recent targets and likely contenders from the current event.',
+            )}
+          </div>
         ) : (
           <table
             style={{

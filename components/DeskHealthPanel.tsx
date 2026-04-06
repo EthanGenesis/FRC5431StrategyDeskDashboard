@@ -44,6 +44,7 @@ export default function DeskHealthPanel({
   const [errorText, setErrorText] = useState('');
   const [refreshingSurfaces, setRefreshingSurfaces] = useState<string[]>([]);
   const [refreshResultText, setRefreshResultText] = useState('');
+  const [activeAction, setActiveAction] = useState<'refresh' | 'clear' | 'reseed'>('refresh');
 
   const loadAll = useCallback(async () => {
     if (!eventKey || !teamNumber) {
@@ -82,10 +83,11 @@ export default function DeskHealthPanel({
     void loadAll();
   }, [externalUpdateKey, loadAll]);
 
-  const refreshSurfaces = useCallback(
-    async (surfaces: CacheRefreshSurfaceId[]) => {
+  const runSurfaceAction = useCallback(
+    async (action: 'refresh' | 'clear' | 'reseed', surfaces: CacheRefreshSurfaceId[]) => {
       if (!eventKey || !teamNumber || !surfaces.length) return;
       setRefreshingSurfaces(surfaces);
+      setActiveAction(action);
       setRefreshResultText('');
       try {
         const response = await fetchJsonOrThrow<CacheRefreshResponse>(
@@ -97,19 +99,21 @@ export default function DeskHealthPanel({
               eventKey,
               team: teamNumber,
               surfaces,
+              action,
             }),
           },
-          'Cache refresh failed',
+          `Cache ${action} failed`,
         );
         const failures = response.results.filter((result) => !result.ok);
+        const actionLabel = `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
         setRefreshResultText(
           failures.length
-            ? `${failures.length} surface refreshes failed.`
-            : `Refreshed ${response.results.length} surface${response.results.length === 1 ? '' : 's'}.`,
+            ? `${failures.length} surface ${action} action${failures.length === 1 ? '' : 's'} failed.`
+            : `${actionLabel}ed ${response.results.length} surface${response.results.length === 1 ? '' : 's'}.`,
         );
         await loadAll();
       } catch (error) {
-        setRefreshResultText(error instanceof Error ? error.message : 'Cache refresh failed');
+        setRefreshResultText(error instanceof Error ? error.message : `Cache ${action} failed`);
       } finally {
         setRefreshingSurfaces([]);
       }
@@ -126,6 +130,39 @@ export default function DeskHealthPanel({
     }
     return map;
   }, [inspector?.surfaces]);
+
+  const dataQualityRows = useMemo(() => {
+    const sourceTrust = health?.sourceTrust ?? null;
+    const staleSurfaces = (health?.staleOrErrorSurfaces ?? []).slice(0, 6);
+    return [
+      sourceTrust
+        ? {
+            label: 'Source disagreement',
+            detail: `${sourceTrust.mismatchCount} mismatches, ${sourceTrust.missingCount} missing checks, ${sourceTrust.staleSeconds != null ? `${sourceTrust.staleSeconds}s stale` : 'freshness unknown'}.`,
+          }
+        : null,
+      staleSurfaces.length
+        ? {
+            label: 'Cold / stale / error surfaces',
+            detail: staleSurfaces
+              .map((row) => `${row.source}: ${row.state}${row.error ? ` (${row.error})` : ''}`)
+              .join(' | '),
+          }
+        : null,
+      inspector?.surfaces?.length
+        ? {
+            label: 'Fallback path in use',
+            detail: inspector.surfaces
+              .slice(0, 6)
+              .map(
+                (row) =>
+                  `${row.label}: ${row.cacheLayer ?? row.cacheState ?? row.state ?? 'unknown'}`,
+              )
+              .join(' | '),
+          }
+        : null,
+    ].filter(Boolean) as { label: string; detail: string }[];
+  }, [health?.sourceTrust, health?.staleOrErrorSurfaces, inspector?.surfaces]);
 
   return (
     <DisclosureSection
@@ -203,10 +240,32 @@ export default function DeskHealthPanel({
             <button
               className="button button-primary"
               type="button"
-              onClick={() => void refreshSurfaces([...CACHE_REFRESH_SURFACES])}
+              onClick={() => void runSurfaceAction('refresh', [...CACHE_REFRESH_SURFACES])}
               disabled={Boolean(refreshingSurfaces.length)}
             >
-              {refreshingSurfaces.length ? 'Refreshing...' : 'Refresh Everything'}
+              {refreshingSurfaces.length && activeAction === 'refresh'
+                ? 'Refreshing...'
+                : 'Refresh Everything'}
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() => void runSurfaceAction('reseed', [...CACHE_REFRESH_SURFACES])}
+              disabled={Boolean(refreshingSurfaces.length)}
+            >
+              {refreshingSurfaces.length && activeAction === 'reseed'
+                ? 'Reseeding...'
+                : 'Reseed Everything'}
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() => void runSurfaceAction('clear', [...CACHE_REFRESH_SURFACES])}
+              disabled={Boolean(refreshingSurfaces.length)}
+            >
+              {refreshingSurfaces.length && activeAction === 'clear'
+                ? 'Clearing...'
+                : 'Clear Warm State'}
             </button>
           </div>
           <div className="grid-3">
@@ -226,10 +285,28 @@ export default function DeskHealthPanel({
                     className="button"
                     type="button"
                     style={{ marginTop: 10 }}
-                    onClick={() => void refreshSurfaces([surface])}
+                    onClick={() => void runSurfaceAction('refresh', [surface])}
                     disabled={refreshing}
                   >
-                    {refreshing ? 'Refreshing...' : 'Refresh'}
+                    {refreshing && activeAction === 'refresh' ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                  <button
+                    className="button"
+                    type="button"
+                    style={{ marginTop: 8 }}
+                    onClick={() => void runSurfaceAction('reseed', [surface])}
+                    disabled={refreshing}
+                  >
+                    {refreshing && activeAction === 'reseed' ? 'Reseeding...' : 'Reseed'}
+                  </button>
+                  <button
+                    className="button"
+                    type="button"
+                    style={{ marginTop: 8 }}
+                    onClick={() => void runSurfaceAction('clear', [surface])}
+                    disabled={refreshing}
+                  >
+                    {refreshing && activeAction === 'clear' ? 'Clearing...' : 'Clear'}
                   </button>
                 </div>
               );
@@ -240,6 +317,25 @@ export default function DeskHealthPanel({
               {refreshResultText}
             </div>
           ) : null}
+        </div>
+
+        <div className="panel" style={{ padding: 16 }}>
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Data Quality Inspector</div>
+          <div className="stack-8">
+            {dataQualityRows.map((row) => (
+              <div key={row.label} className="panel-2" style={{ padding: 12 }}>
+                <div style={{ fontWeight: 800 }}>{row.label}</div>
+                <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                  {row.detail}
+                </div>
+              </div>
+            ))}
+            {!dataQualityRows.length ? (
+              <div className="muted">
+                No major disagreement or stale-surface warnings are active right now.
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="grid-2">

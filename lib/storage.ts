@@ -1,4 +1,9 @@
-import type { CompositeWeights, SettingsState, WebhookSettings } from './types';
+import type {
+  CompositeWeights,
+  QueueAlarmPreferenceKey,
+  SettingsState,
+  WebhookSettings,
+} from './types';
 
 export const DEFAULT_WEIGHTS: CompositeWeights = {
   overallEpa: 30,
@@ -30,6 +35,13 @@ export const DEFAULT_WEBHOOK_SETTINGS: WebhookSettings = {
   },
 };
 
+export const DEFAULT_QUEUE_ALARM_STATES: Record<QueueAlarmPreferenceKey, boolean> = {
+  QUEUE_5: true,
+  QUEUE_2: true,
+  QUEUE_1: true,
+  PLAYING_NOW: true,
+};
+
 export const DEFAULT_SETTINGS: SettingsState = {
   teamNumber: 5431,
   eventKey: '',
@@ -47,6 +59,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   operatorLabel: '',
   freezeAutoRefresh: false,
   deskMode: 'competition',
+  queueAlarmStates: DEFAULT_QUEUE_ALARM_STATES,
 };
 
 const SETTINGS_KEY = 'tbsb_dashboard_settings_v1';
@@ -71,6 +84,9 @@ export function loadSettings(): SettingsState {
     const parsedWebhookEvents = isRecord(parsedWebhook.events)
       ? (parsedWebhook.events as Partial<WebhookSettings['events']>)
       : {};
+    const parsedQueueAlarmStates = isRecord(parsedRecord.queueAlarmStates)
+      ? (parsedRecord.queueAlarmStates as Partial<Record<QueueAlarmPreferenceKey, boolean>>)
+      : {};
     return {
       ...DEFAULT_SETTINGS,
       ...parsedRecord,
@@ -85,6 +101,10 @@ export function loadSettings(): SettingsState {
           ...DEFAULT_WEBHOOK_SETTINGS.events,
           ...parsedWebhookEvents,
         },
+      },
+      queueAlarmStates: {
+        ...DEFAULT_QUEUE_ALARM_STATES,
+        ...parsedQueueAlarmStates,
       },
     };
   } catch {

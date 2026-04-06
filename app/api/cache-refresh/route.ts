@@ -1,9 +1,17 @@
 import type { NextResponse } from 'next/server';
 
 import { CACHE_REFRESH_SURFACES, isCacheRefreshSurfaceId } from '../../../lib/cache-surfaces';
+import {
+  buildBootstrapHotCacheKey,
+  buildDistrictSnapshotHotCacheKey,
+  buildGameManualHotCacheKey,
+  buildRefreshStatusHotCacheKey,
+} from '../../../lib/hot-cache-keys';
+import { deleteHotCacheKey } from '../../../lib/hot-cache-server';
 import { readJsonResponse } from '../../../lib/httpCache';
 import { beginRouteRequest, routeErrorJson, routeJson } from '../../../lib/observability';
 import { loadSharedActiveTarget } from '../../../lib/shared-target-server';
+import { deleteSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import type { CacheRefreshResponse, CacheRefreshSurfaceResult } from '../../../lib/types';
 import { getEventWorkspaceKey } from '../../../lib/workspace-key';
 import { GET as getBootstrapRoute } from '../bootstrap/route';
@@ -50,6 +58,66 @@ function readStringArray(value: unknown): string[] {
       .filter(Boolean);
   }
   return [];
+}
+
+function readAction(value: unknown): 'refresh' | 'clear' | 'reseed' {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized === 'clear') return 'clear';
+  if (normalized === 'reseed') return 'reseed';
+  return 'refresh';
+}
+
+async function clearSurfaceCaches(input: {
+  surface: string;
+  workspaceKey: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+}): Promise<CacheRefreshSurfaceResult> {
+  const { surface, workspaceKey, eventKey, teamNumber } = input;
+
+  try {
+    if (surface === 'bootstrap') {
+      await Promise.all([
+        deleteHotCacheKey(buildBootstrapHotCacheKey(workspaceKey)),
+        deleteHotCacheKey(buildRefreshStatusHotCacheKey(workspaceKey)),
+      ]);
+    } else if (surface === 'snapshot') {
+      await deleteSnapshotCacheRecord('snapshot', eventKey, teamNumber);
+    } else if (surface === 'event-context') {
+      await deleteSnapshotCacheRecord('event_context', eventKey, null);
+    } else if (surface === 'team-profile') {
+      await Promise.all([
+        deleteSnapshotCacheRecord('team_profile', eventKey, teamNumber),
+        deleteSnapshotCacheRecord('team_profile_summary', eventKey, teamNumber),
+      ]);
+    } else if (surface === 'data-super') {
+      await deleteSnapshotCacheRecord('data_super', eventKey, teamNumber);
+    } else if (surface === 'district-points') {
+      await deleteHotCacheKey(buildDistrictSnapshotHotCacheKey(eventKey, teamNumber));
+    } else if (surface === 'game-manual') {
+      await deleteHotCacheKey(buildGameManualHotCacheKey('2026'));
+    } else if (surface === 'team-dossier') {
+      await deleteSnapshotCacheRecord('team_dossier', eventKey, teamNumber);
+    } else if (surface === 'pit-ops') {
+      await deleteSnapshotCacheRecord('pit_ops', eventKey, teamNumber);
+    }
+
+    return {
+      surface,
+      ok: true,
+      status: 200,
+      generatedAtMs: Date.now(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      surface,
+      ok: false,
+      status: 500,
+      generatedAtMs: null,
+      error: error instanceof Error ? error.message : `Failed to clear ${surface}`,
+    };
+  }
 }
 
 async function invokeHandler(
@@ -174,6 +242,7 @@ export async function POST(
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const sharedTarget = await loadSharedActiveTarget();
+    const action = readAction(body.action);
     const eventKey =
       readOptionalString(body.eventKey) ??
       readOptionalString(body.event_key) ??
@@ -205,7 +274,24 @@ export async function POST(
 
     const results = await Promise.all(
       surfaces.map(async (surface) => {
+        if (action === 'clear') {
+          return clearSurfaceCaches({
+            surface,
+            workspaceKey,
+            eventKey,
+            teamNumber,
+          });
+        }
+
         if (surface === 'bootstrap') {
+          if (action === 'reseed') {
+            await clearSurfaceCaches({
+              surface,
+              workspaceKey,
+              eventKey,
+              teamNumber,
+            });
+          }
           const refreshResult = await refreshSharedTargetCaches();
           if (!refreshResult.ok) {
             return {
@@ -227,6 +313,15 @@ export async function POST(
             generatedAtMs: null,
             error: 'A loaded event and team are required for this surface.',
           } satisfies CacheRefreshSurfaceResult;
+        }
+
+        if (action === 'reseed') {
+          await clearSurfaceCaches({
+            surface,
+            workspaceKey,
+            eventKey,
+            teamNumber,
+          });
         }
 
         const handlerMap = {

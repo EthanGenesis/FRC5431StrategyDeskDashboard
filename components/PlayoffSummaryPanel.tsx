@@ -13,6 +13,7 @@ type PlayoffSummaryPanelProps = {
   teamNumber?: number | null;
   activeScenarioId?: string | null;
   externalUpdateKey?: number;
+  summaryOverride?: PlayoffSummaryResponse | null;
 };
 
 function pct(value: unknown): string {
@@ -25,11 +26,17 @@ export default function PlayoffSummaryPanel({
   teamNumber = null,
   activeScenarioId = null,
   externalUpdateKey = 0,
+  summaryOverride = null,
 }: PlayoffSummaryPanelProps) {
   const [summary, setSummary] = useState<PlayoffSummaryResponse | null>(null);
   const [errorText, setErrorText] = useState('');
 
   const loadSummary = useCallback(async () => {
+    if (summaryOverride) {
+      setSummary(summaryOverride);
+      setErrorText('');
+      return;
+    }
     if (!eventKey || !teamNumber) {
       setSummary(null);
       return;
@@ -51,7 +58,7 @@ export default function PlayoffSummaryPanel({
       setErrorText(error instanceof Error ? error.message : 'Unknown playoff summary error');
       setSummary(null);
     }
-  }, [activeScenarioId, eventKey, teamNumber]);
+  }, [activeScenarioId, eventKey, summaryOverride, teamNumber]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
