@@ -17,6 +17,11 @@ Status key:
 | Queue 5 / Queue 2 / Queue 1 / Playing Now pinned awareness | Expanded | Queue ladder and desk-ops strip now expose the alert ladder directly.            |
 | Persistent source trust / freshness context                | Added    | `Desk Ops` now shows FIRST / Nexus / official trust summary and mismatch counts. |
 | “What changed” event-day deltas                            | Added    | `Desk Ops` now surfaces recent deltas for rank/queue/source changes.             |
+| Exact rival-pressure board                                 | Added    | `Desk Ops` now shows the live rival pressure band with RP/composite context.     |
+| Better key-match watchlist explanations                    | Added    | `Desk Ops` now surfaces both alliances, predicted context, and rival narratives. |
+| “What this next result means” quick impact text            | Added    | `Desk Ops` now shows best/floor rank movement and quick impact calls.            |
+| Field-delay diagnostics                                    | Added    | `Desk Ops` now summarizes queue/on-deck/start timing drift vs TBA time.          |
+| Rival-highlighted key matches                              | Added    | Rival teams now render as highlighted chips inside each key-match watch card.    |
 | Competition-vs-analyst layout mode                         | Added    | Added to Settings and surfaced in header badges.                                 |
 | Freeze-state / discussion mode                             | Added    | `freezeAutoRefresh` pauses the main live auto-refresh loops.                     |
 | Shared notes for event / team / match                      | Added    | Backed by new workspace note persistence.                                        |
@@ -42,19 +47,23 @@ Status key:
 
 ## Pick List / Alliance / Playoff Decision Support
 
-| Feature                                       | Status   | Notes                                                                                     |
-| --------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
-| Saved pick lists                              | Exists   | Already present.                                                                          |
-| Saved alliance scenarios                      | Exists   | Already present.                                                                          |
-| Saved playoff results                         | Exists   | Already present.                                                                          |
-| Pick-list detail / comparison support         | Expanded | New `Pick List Decision Center` adds bucket stats, best-by-role, and scenario comparison. |
-| “If selection started now” view               | Added    | Added to pick-list analysis API + UI.                                                     |
-| Best available by role                        | Added    | Added to pick-list analysis API + UI.                                                     |
-| Captain-risk summaries                        | Added    | Added to saved pick-list scenario summaries.                                              |
-| Decision-log count summaries                  | Added    | Added to saved pick-list scenario summaries.                                              |
-| Saved playoff comparison matrix               | Expanded | New `Playoff Summary Matrix` compares saved playoff scenarios directly.                   |
-| All-alliance odds view                        | Expanded | Playoff summary surfaces current all-alliance odds, not only our alliance.                |
-| Visible manual-vs-simulated playoff summaries | Expanded | Exposed in saved playoff scenario comparison rows.                                        |
+| Feature                                                | Status   | Notes                                                                                      |
+| ------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------ |
+| Saved pick lists                                       | Exists   | Already present.                                                                           |
+| Saved alliance scenarios                               | Exists   | Already present.                                                                           |
+| Saved playoff results                                  | Exists   | Already present.                                                                           |
+| Pick-list detail / comparison support                  | Expanded | New `Pick List Decision Center` adds bucket stats, best-by-role, and scenario comparison.  |
+| “If selection started now” view                        | Added    | Added to pick-list analysis API + UI.                                                      |
+| Best available by role                                 | Added    | Added to pick-list analysis API + UI.                                                      |
+| Likely first-pick watchlist                            | Added    | `Pick List Decision Center` now surfaces likely early-pick pressure rows.                  |
+| Captain threat board                                   | Added    | `Pick List Decision Center` now surfaces captain-band threats and denial context.          |
+| Explicit first-pick / second-pick / do-not-pick boards | Added    | The active pick list now opens as three detailed bucket boards with fit/readiness context. |
+| Decision-log detail surfacing                          | Added    | The active pick list now exposes actual logged notes/tags, not only summary counts.        |
+| Captain-risk summaries                                 | Added    | Added to saved pick-list scenario summaries.                                               |
+| Decision-log count summaries                           | Added    | Added to saved pick-list scenario summaries.                                               |
+| Saved playoff comparison matrix                        | Expanded | New `Playoff Summary Matrix` compares saved playoff scenarios directly.                    |
+| All-alliance odds view                                 | Expanded | Playoff summary surfaces current all-alliance odds, not only our alliance.                 |
+| Visible manual-vs-simulated playoff summaries          | Expanded | Exposed in saved playoff scenario comparison rows.                                         |
 
 ## Team / Analytics / Dossier Support
 
@@ -63,6 +72,10 @@ Status key:
 | Team profile and current/historical scouting | Exists | Already present.                                                                            |
 | Team dossier view                            | Added  | New dossier API + panel adds role summary, volatility, leverage, and best-evidence matches. |
 | Current-event vs season context              | Added  | Included in team dossier charts/cards.                                                      |
+| Previous-event snapshot                      | Added  | Team dossier now carries the latest prior-event summary and replay context.                 |
+| Recent event history list                    | Added  | Team dossier now shows recent events with rank, EPA, win-rate, and quick scouting notes.    |
+| Recent event trend chart                     | Added  | Team dossier now charts recent-event EPA / win-rate / rank movement together.               |
+| Recent trend flags                           | Added  | Team dossier now surfaces concise current-vs-season and previous-event trend flags.         |
 | Rank / RP trajectory                         | Added  | Included in team dossier.                                                                   |
 | Best-evidence matches                        | Added  | Included in team dossier.                                                                   |
 | Win-condition flags                          | Added  | Included in team dossier leverage output.                                                   |

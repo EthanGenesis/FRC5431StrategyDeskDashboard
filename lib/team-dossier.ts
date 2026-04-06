@@ -53,6 +53,156 @@ function topMatches(matches: TeamProfileMatch[]): TeamProfileMatch[] {
     .slice(0, 5);
 }
 
+type HistoricalEventSummaryRow = {
+  eventKey: string;
+  eventName: string;
+  totalMatches: number;
+  winRate: number | null;
+  avgMargin: number | null;
+  avgEpa: number | null;
+  rank: number | null;
+  lastMatchTimeMs: number | null;
+  insight: string;
+};
+
+function eventInsight(row: { winRate: number | null; avgMargin: number | null }): string {
+  if (row.winRate == null) return 'No complete previous-event summary yet.';
+  if (row.winRate >= 0.7) return 'Strong previous-event signal worth carrying forward.';
+  if (row.winRate <= 0.35)
+    return 'Bounce-back candidate; scout what changed from this rougher event.';
+  if ((row.avgMargin ?? 0) >= 12) return 'Positive event margin suggests sturdy match control.';
+  if ((row.avgMargin ?? 0) <= -12) return 'Margins stayed under pressure; matchup details matter.';
+  return 'Mixed event results; scout the exact matchups that drove the swing.';
+}
+
+function buildHistoricalEventRows(profile: TeamProfileRouteResponse): HistoricalEventSummaryRow[] {
+  const historicalMatches = (profile.historical2026?.matches ?? []).filter((match) => match.played);
+  const playedEventRows = profile.historical2026?.playedEvents ?? [];
+  const byEvent = new Map<string, TeamProfileMatch[]>();
+  for (const match of historicalMatches) {
+    if (!match.eventKey) continue;
+    const existing = byEvent.get(match.eventKey) ?? [];
+    existing.push(match);
+    byEvent.set(match.eventKey, existing);
+  }
+  if (!byEvent.size && !playedEventRows.length) return [];
+
+  const rowsFromMatches = [...byEvent.entries()].map(([eventKey, matches]) => ({
+    eventKey,
+    matches,
+    lastTime: Math.max(...matches.map((match) => numericValue(match.time) ?? 0)),
+  }));
+  const seededEvents = playedEventRows
+    .map((row) => ({
+      eventKey: stringField(row, 'event'),
+      eventName: stringField(row, 'event_name'),
+      rank:
+        numericValue(nestedNumber(row, 'record', 'qual', 'rank')) ??
+        numericValue(nestedNumber(row, 'rank')) ??
+        null,
+    }))
+    .filter((row) => row.eventKey);
+
+  const eventMap = new Map<string, HistoricalEventSummaryRow>();
+
+  for (const eventRow of rowsFromMatches) {
+    const playedEventRow =
+      playedEventRows.find((row) => stringField(row, 'event') === eventRow.eventKey) ?? null;
+    const totalMatches = eventRow.matches.length;
+    const wins = eventRow.matches.filter((match) => match.result === 'win').length;
+    const winRate = totalMatches > 0 ? wins / totalMatches : null;
+    const avgMargin = mean(
+      eventRow.matches
+        .map((match) => numericValue(match.margin))
+        .filter((value): value is number => value != null),
+    );
+    const avgEpa = mean(
+      eventRow.matches
+        .map((match) => numericValue(match.epaTotal))
+        .filter((value): value is number => value != null),
+    );
+    const rank =
+      numericValue(nestedNumber(playedEventRow, 'record', 'qual', 'rank')) ??
+      numericValue(nestedNumber(playedEventRow, 'rank')) ??
+      null;
+    const eventNameFromPlayed = stringField(playedEventRow, 'event_name');
+    const eventName = eventNameFromPlayed.trim()
+      ? eventNameFromPlayed
+      : (eventRow.matches[0]?.eventName ?? eventRow.eventKey);
+    eventMap.set(eventRow.eventKey, {
+      eventKey: eventRow.eventKey,
+      eventName,
+      totalMatches,
+      winRate,
+      avgMargin,
+      avgEpa,
+      rank,
+      lastMatchTimeMs: eventRow.lastTime > 0 ? eventRow.lastTime : null,
+      insight: eventInsight({ winRate, avgMargin }),
+    });
+  }
+
+  for (const seededEvent of seededEvents) {
+    if (eventMap.has(seededEvent.eventKey)) continue;
+    eventMap.set(seededEvent.eventKey, {
+      eventKey: seededEvent.eventKey,
+      eventName: seededEvent.eventName || seededEvent.eventKey,
+      totalMatches: 0,
+      winRate: null,
+      avgMargin: null,
+      avgEpa: null,
+      rank: seededEvent.rank,
+      lastMatchTimeMs: null,
+      insight: 'Historical event listed without match-level detail yet.',
+    });
+  }
+
+  return [...eventMap.values()].sort(
+    (left, right) => Number(right.lastMatchTimeMs ?? 0) - Number(left.lastMatchTimeMs ?? 0),
+  );
+}
+
+function buildRecentTrendFlags(params: {
+  currentVsSeason: {
+    label: string;
+    current: number | null;
+    season: number | null;
+    delta: number | null;
+  }[];
+  roleMetrics: TeamDossierRoleMetric[];
+  volatilityLabel: string;
+  previousEventSummary: HistoricalEventSummaryRow | null;
+}) {
+  const flags: string[] = [];
+  const epaGap = params.currentVsSeason.find((row) => row.label === 'EPA') ?? null;
+  const winRateGap = params.currentVsSeason.find((row) => row.label === 'Win rate') ?? null;
+  if ((epaGap?.delta ?? 0) >= 3) {
+    flags.push('Current-event EPA is running above the season baseline.');
+  } else if ((epaGap?.delta ?? 0) <= -3) {
+    flags.push('Current-event EPA is running below the season baseline.');
+  }
+  if ((winRateGap?.delta ?? 0) >= 0.15) {
+    flags.push('Current event results are outperforming the season win-rate pace.');
+  }
+  if (params.volatilityLabel === 'Swingy') {
+    flags.push('Treat ceiling and floor separately; match-to-match variance is high.');
+  }
+  const strongestRole = [...params.roleMetrics].sort(
+    (left, right) => Number(right.delta ?? -999) - Number(left.delta ?? -999),
+  )[0];
+  if (strongestRole && (strongestRole.delta ?? 0) >= 2) {
+    flags.push(`${strongestRole.label} is the clearest current-event edge.`);
+  }
+  if (params.previousEventSummary?.winRate != null) {
+    flags.push(
+      `Previous event (${params.previousEventSummary.eventName}) finished at ${Math.round(
+        params.previousEventSummary.winRate * 100,
+      )}% win rate.`,
+    );
+  }
+  return flags.slice(0, 4);
+}
+
 function buildRoleMetrics(profile: TeamProfileRouteResponse): TeamDossierRoleMetric[] {
   const currentRow = profile.currentEvent?.eventRow ?? null;
   const fieldAverages = asRecord(profile.currentEvent?.fieldAverages ?? null);
@@ -193,6 +343,8 @@ export function buildTeamDossier(profile: TeamProfileRouteResponse): TeamDossier
     ...row,
     delta: row.current != null && row.season != null ? row.current - row.season : null,
   }));
+  const recentEvents = buildHistoricalEventRows(profile);
+  const previousEventSummary = recentEvents[0] ?? null;
 
   const winConditionFlags = roleMetrics
     .filter((metric) => (metric.delta ?? 0) >= 1.5)
@@ -217,6 +369,22 @@ export function buildTeamDossier(profile: TeamProfileRouteResponse): TeamDossier
             nestedNumber(eventRow, 'record', 'qual', 'rank') ?? nestedNumber(eventRow, 'rank'),
           ),
         }));
+  const recentTrendFlags = buildRecentTrendFlags({
+    currentVsSeason,
+    roleMetrics,
+    volatilityLabel,
+    previousEventSummary,
+  });
+  const recentEventTrend = recentEvents
+    .slice(0, 6)
+    .reverse()
+    .map((row) => ({
+      label: row.eventName,
+      avgEpa: row.avgEpa,
+      winRatePercent: row.winRate != null ? row.winRate * 100 : null,
+      rank: row.rank,
+      matches: row.totalMatches,
+    }));
 
   return {
     generatedAtMs: Date.now(),
@@ -240,6 +408,10 @@ export function buildTeamDossier(profile: TeamProfileRouteResponse): TeamDossier
     currentVsSeason,
     roleMetrics,
     bestEvidenceMatches,
+    previousEventSummary,
+    recentEvents,
+    recentEventTrend,
+    recentTrendFlags,
     rankTrajectory,
   };
 }

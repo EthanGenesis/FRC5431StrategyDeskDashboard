@@ -5,6 +5,7 @@ import { loadSnapshotCacheRecord } from '../../../lib/source-cache-server';
 import { loadSharedActiveTarget } from '../../../lib/shared-target-server';
 import type { AppSnapshot, DeskOpsResponse, WorkspaceNote } from '../../../lib/types';
 import { getEventWorkspaceKey } from '../../../lib/workspace-key';
+import { buildDeskOpsInsights } from '../../../lib/desk-ops-insights';
 import {
   loadWorkspaceActivitySharedServer,
   loadWorkspaceChecklistsSharedServer,
@@ -52,6 +53,10 @@ function emptyDeskOpsResponse(workspaceKey: string): DeskOpsResponse {
     notes: [],
     activity: [],
     deltas: [],
+    impactSummary: null,
+    delayDiagnostics: null,
+    rivalPressure: [],
+    keyMatchWatchlist: [],
   };
 }
 
@@ -90,6 +95,7 @@ export async function GET(
     const recentSignals = Array.isArray(snapshot?.liveSignals)
       ? snapshot.liveSignals.slice(0, 5)
       : [];
+    const insights = buildDeskOpsInsights(snapshot, teamNumber);
     const checklist = checklists[0] ?? null;
     const relevantNotes = sortNotes(
       notes.filter((note) => {
@@ -140,6 +146,10 @@ export async function GET(
         })),
         recentActivity: activity,
       }),
+      impactSummary: insights.impactSummary,
+      delayDiagnostics: insights.delayDiagnostics,
+      rivalPressure: insights.rivalPressure,
+      keyMatchWatchlist: insights.keyMatchWatchlist,
     };
 
     return routeJson(routeContext, response, undefined, {

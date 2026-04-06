@@ -363,6 +363,54 @@ export type DeskOpsDeltaItem = {
   createdAtMs: number | null;
 };
 
+export type DeskOpsRivalPressureRow = {
+  teamKey: string;
+  teamNumber: number | null;
+  nickname: string;
+  rank: number | null;
+  totalRp: number | null;
+  gapToUs: number | null;
+  composite: number | null;
+  record: string | null;
+  isLoadedTeam: boolean;
+};
+
+export type DeskOpsKeyMatchWatchRow = {
+  matchKey: string;
+  matchLabel: string;
+  rivalTeamKey: string | null;
+  rivalTeamNumber: number | null;
+  redTeams: string[];
+  blueTeams: string[];
+  redWinProb: number | null;
+  blueWinProb: number | null;
+  redScore: number | null;
+  blueScore: number | null;
+  narrative: string;
+};
+
+export type DeskOpsImpactSummary = {
+  selectedMatchKey: string | null;
+  selectedMatchLabel: string | null;
+  projectedBestRank: number | null;
+  projectedBestRankRp: number | null;
+  projectedWorstRank: number | null;
+  projectedWorstRankRp: number | null;
+  projectedBand: string;
+  quickCalls: string[];
+};
+
+export type DeskOpsDelayDiagnostics = {
+  officialMatchTimeMs: number | null;
+  predictedMatchTimeMs: number | null;
+  estimatedQueueTimeMs: number | null;
+  estimatedOnDeckTimeMs: number | null;
+  estimatedOnFieldTimeMs: number | null;
+  estimatedStartTimeMs: number | null;
+  fieldLagMinutes: number | null;
+  summary: string;
+};
+
 export type DeskOpsResponse = {
   generatedAtMs: number;
   workspaceKey: string;
@@ -379,6 +427,10 @@ export type DeskOpsResponse = {
   notes: WorkspaceNote[];
   activity: WorkspaceActivityEntry[];
   deltas: DeskOpsDeltaItem[];
+  impactSummary: DeskOpsImpactSummary | null;
+  delayDiagnostics: DeskOpsDelayDiagnostics | null;
+  rivalPressure: DeskOpsRivalPressureRow[];
+  keyMatchWatchlist: DeskOpsKeyMatchWatchRow[];
 };
 
 export type TeamDossierRoleMetric = {
@@ -420,10 +472,64 @@ export type TeamDossierResponse = {
     epa: number | null;
     reason: string;
   }[];
+  previousEventSummary: {
+    eventKey: string;
+    eventName: string;
+    totalMatches: number;
+    winRate: number | null;
+    avgMargin: number | null;
+    avgEpa: number | null;
+    rank: number | null;
+    insight: string;
+  } | null;
+  recentEvents: {
+    eventKey: string;
+    eventName: string;
+    totalMatches: number;
+    winRate: number | null;
+    avgMargin: number | null;
+    avgEpa: number | null;
+    rank: number | null;
+    lastMatchTimeMs: number | null;
+    insight: string;
+  }[];
+  recentEventTrend: {
+    label: string;
+    avgEpa: number | null;
+    winRatePercent: number | null;
+    rank: number | null;
+    matches: number;
+  }[];
+  recentTrendFlags: string[];
   rankTrajectory: {
     label: string;
     value: number | null;
   }[];
+};
+
+export type PickListBucketKey = 'first' | 'second' | 'avoid';
+
+export type PickListBucketBoardRow = {
+  teamKey: string;
+  teamNumber: number | null;
+  nickname: string | null;
+  comment: string | null;
+  tag: string | null;
+  detail: string;
+  recommendation: string | null;
+  fit: number | null;
+  ready: number | null;
+  ceiling: number | null;
+  denial: number | null;
+};
+
+export type PickListDecisionLogEntry = {
+  teamKey: string;
+  teamNumber: number | null;
+  nickname: string | null;
+  bucket: PickListBucketKey;
+  comment: string | null;
+  tag: string | null;
 };
 
 export type PickListAnalysisRoleRow = {
@@ -432,11 +538,21 @@ export type PickListAnalysisRoleRow = {
   teamNumber: number | null;
   nickname: string | null;
   insight: string;
+  tags: string[];
   pick: number | null;
   fit: number | null;
   denial: number | null;
   ready: number | null;
   ceiling: number | null;
+};
+
+export type PickListWatchlistRow = {
+  teamKey: string | null;
+  teamNumber: number | null;
+  nickname: string | null;
+  rank: number | null;
+  tags: string[];
+  detail: string;
 };
 
 export type PickListScenarioAnalysisRow = {
@@ -472,6 +588,14 @@ export type PickListAnalysisResponse = {
     teamNumber: number | null;
     detail: string;
   }[];
+  likelyFirstPicks: PickListWatchlistRow[];
+  captainThreats: PickListWatchlistRow[];
+  bucketBoards: {
+    key: PickListBucketKey;
+    label: string;
+    rows: PickListBucketBoardRow[];
+  }[];
+  decisionLogEntries: PickListDecisionLogEntry[];
   scenarioRows: PickListScenarioAnalysisRow[];
 };
 

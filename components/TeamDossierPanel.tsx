@@ -131,6 +131,91 @@ export default function TeamDossierPanel({
         </div>
 
         <div className="grid-2">
+          <AnalyticsChartBlock
+            title="Recent Event Trend"
+            description="How the last few events have moved in EPA, win rate, and rank."
+            data={dossier?.recentEventTrend ?? []}
+            chartFamily="line"
+            series={[
+              { key: 'avgEpa', label: 'Avg EPA', color: '#4bb3fd' },
+              { key: 'winRatePercent', label: 'Win %', color: '#2dd4bf' },
+              { key: 'rank', label: 'Rank', color: '#f59e0b' },
+            ]}
+            valueFormatter={(value) => fmt(value, 1)}
+          />
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Event History</div>
+            <div className="stack-8">
+              {(dossier?.recentEvents ?? []).slice(0, 5).map((eventRow) => (
+                <div key={eventRow.eventKey} className="panel-2" style={{ padding: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontWeight: 800 }}>{eventRow.eventName}</div>
+                    <div className="muted">Rank {eventRow.rank ?? '-'}</div>
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Matches {eventRow.totalMatches} | Win rate{' '}
+                    {fmt(eventRow.winRate != null ? eventRow.winRate * 100 : null, 0)}% | Avg EPA{' '}
+                    {fmt(eventRow.avgEpa, 1)}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    {eventRow.insight}
+                  </div>
+                </div>
+              ))}
+              {!dossier?.recentEvents?.length ? (
+                <div className="muted">No recent event history yet.</div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Previous Event Snapshot</div>
+            {dossier?.previousEventSummary ? (
+              <div className="stack-8">
+                <div className="panel-2" style={{ padding: 10 }}>
+                  <div style={{ fontWeight: 800 }}>{dossier.previousEventSummary.eventName}</div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Rank {dossier.previousEventSummary.rank ?? '-'} | Matches{' '}
+                    {dossier.previousEventSummary.totalMatches} | Win rate{' '}
+                    {fmt(
+                      dossier.previousEventSummary.winRate != null
+                        ? dossier.previousEventSummary.winRate * 100
+                        : null,
+                      0,
+                    )}
+                    %
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Avg margin {fmt(dossier.previousEventSummary.avgMargin, 1)} | Avg EPA{' '}
+                    {fmt(dossier.previousEventSummary.avgEpa, 1)}
+                  </div>
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {dossier.previousEventSummary.insight}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="muted">No previous-event summary yet.</div>
+            )}
+          </div>
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Trend Flags</div>
+            <div className="stack-8">
+              {(dossier?.recentTrendFlags ?? []).map((flag) => (
+                <div key={flag} className="panel-2" style={{ padding: 10 }}>
+                  <div className="muted">{flag}</div>
+                </div>
+              ))}
+              {!dossier?.recentTrendFlags?.length ? (
+                <div className="muted">No recent trend flags yet.</div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid-2">
           <div className="panel" style={{ padding: 16 }}>
             <div style={{ fontWeight: 900, marginBottom: 10 }}>Phase Role Metrics</div>
             <div className="stack-8">

@@ -61,6 +61,32 @@ function topInsightRows(rows: AllianceCandidateInsight[], key: keyof AllianceCan
     .slice(0, 1);
 }
 
+function specialtyTags(row: AllianceCandidateInsight | null | undefined): string[] {
+  if (!row) return [];
+  const phaseRows = [
+    { label: 'Auto', value: Number(row.autoEpa ?? row.overallEpa ?? 0) },
+    { label: 'Teleop', value: Number(row.teleopEpa ?? row.overallEpa ?? 0) },
+    { label: 'Endgame', value: Number(row.endgameEpa ?? row.overallEpa ?? 0) },
+  ].sort((left, right) => right.value - left.value);
+  const tags: string[] = [];
+  const topPhase = phaseRows[0] ?? null;
+  const secondPhase = phaseRows[1] ?? null;
+  if (Number(row.realRank ?? 999) <= 8) tags.push('Captain band');
+  if (topPhase && topPhase.value > 0 && topPhase.value - Number(secondPhase?.value ?? 0) >= 1.5) {
+    tags.push(`${topPhase.label} specialist`);
+  } else {
+    tags.push('Balanced phases');
+  }
+  if (Number(row.playoffReadyScore ?? 0) >= 70) tags.push('Playoff ready');
+  if (Number(row.denialValueScore ?? 0) >= 70) tags.push('Captain denial');
+  return tags.slice(0, 3);
+}
+
+function trimmedString(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
 export function buildPickListAnalysis(params: {
   workspaceKey: string;
   eventKey: string;
@@ -128,6 +154,7 @@ export function buildPickListAnalysis(params: {
     teamNumber: item.row?.teamNumber ?? null,
     nickname: item.row?.nickname ?? null,
     insight: item.insight,
+    tags: specialtyTags(item.row),
     pick: item.row?.pickValueScore ?? null,
     fit: item.row?.chemistryScore ?? null,
     denial: item.row?.denialValueScore ?? null,
@@ -141,6 +168,94 @@ export function buildPickListAnalysis(params: {
     teamNumber: row.teamNumber ?? null,
     detail: `${row.bestUseCase} | ${row.recommendationReason}`,
   }));
+
+  const likelyFirstPicks = [...candidateInsights]
+    .sort((left, right) => {
+      const valueGap = Number(right.pickValueScore ?? 0) - Number(left.pickValueScore ?? 0);
+      if (valueGap !== 0) return valueGap;
+      return Number(left.realRank ?? 999) - Number(right.realRank ?? 999);
+    })
+    .slice(0, 6)
+    .map((row) => ({
+      teamKey: row.teamKey,
+      teamNumber: row.teamNumber ?? null,
+      nickname: row.nickname ?? null,
+      rank: Number.isFinite(Number(row.realRank)) ? Number(row.realRank) : null,
+      tags: specialtyTags(row),
+      detail: `${row.bestUseCase} | ${row.recommendationReason}`,
+    }));
+
+  const captainThreats = [...candidateInsights]
+    .filter((row) => Number(row.realRank ?? 999) <= 8)
+    .sort((left, right) => {
+      const rankGap = Number(left.realRank ?? 999) - Number(right.realRank ?? 999);
+      if (rankGap !== 0) return rankGap;
+      return Number(right.denialValueScore ?? 0) - Number(left.denialValueScore ?? 0);
+    })
+    .slice(0, 8)
+    .map((row) => ({
+      teamKey: row.teamKey,
+      teamNumber: row.teamNumber ?? null,
+      nickname: row.nickname ?? null,
+      rank: Number.isFinite(Number(row.realRank)) ? Number(row.realRank) : null,
+      tags: specialtyTags(row),
+      detail: `Likely captain pressure. ${row.recommendationReason}`,
+    }));
+
+  const bucketBoards = activePickList
+    ? (
+        [
+          ['first', 'First-Pick Board'],
+          ['second', 'Second-Pick Board'],
+          ['avoid', 'Do-Not-Pick Board'],
+        ] as const
+      ).map(([bucketKey, label]) => ({
+        key: bucketKey,
+        label,
+        rows: (activePickList[bucketKey] ?? []).map((entry) => {
+          const insight = insightMap.get(entry.teamKey) ?? null;
+          return {
+            teamKey: entry.teamKey,
+            teamNumber: entry.teamNumber ?? insight?.teamNumber ?? null,
+            nickname: entry.nickname ?? insight?.nickname ?? null,
+            comment: trimmedString(entry.comment),
+            tag: trimmedString(entry.tag),
+            detail: insight
+              ? `${insight.bestUseCase} | ${insight.recommendationReason}`
+              : 'No current recommendation context was generated for this team.',
+            recommendation: insight?.recommendation ?? null,
+            fit: insight?.chemistryScore ?? null,
+            ready: insight?.playoffReadyScore ?? null,
+            ceiling: insight?.ceilingScore ?? null,
+            denial: insight?.denialValueScore ?? null,
+          };
+        }),
+      }))
+    : [];
+
+  const decisionLogEntries = (
+    activePickList
+      ? ([
+          ['first', activePickList.first ?? []],
+          ['second', activePickList.second ?? []],
+          ['avoid', activePickList.avoid ?? []],
+        ] as const)
+      : []
+  ).flatMap(([bucketKey, rows]) =>
+    rows
+      .filter((entry) => (trimmedString(entry.comment) ?? trimmedString(entry.tag)) != null)
+      .map((entry) => {
+        const insight = insightMap.get(entry.teamKey) ?? null;
+        return {
+          teamKey: entry.teamKey,
+          teamNumber: entry.teamNumber ?? insight?.teamNumber ?? null,
+          nickname: entry.nickname ?? insight?.nickname ?? null,
+          bucket: bucketKey,
+          comment: trimmedString(entry.comment),
+          tag: trimmedString(entry.tag),
+        };
+      }),
+  );
 
   const scenarioRows: PickListScenarioAnalysisRow[] = params.pickLists.map((item) => {
     const first = item.first ?? [];
@@ -175,6 +290,10 @@ export function buildPickListAnalysis(params: {
     bucketSummary,
     bestByRole,
     ifSelectionStartedNow,
+    likelyFirstPicks,
+    captainThreats,
+    bucketBoards,
+    decisionLogEntries,
     scenarioRows,
   };
 }

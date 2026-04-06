@@ -32,10 +32,48 @@ function fmtTimestamp(value: number | null | undefined): string {
   return new Date(Number(value)).toLocaleString();
 }
 
+function fmtPct(value: number | null | undefined): string {
+  if (!Number.isFinite(Number(value))) return '-';
+  return `${Math.round(Number(value) * 100)}%`;
+}
+
+function fmtSigned(value: number | null | undefined, digits = 1): string {
+  if (!Number.isFinite(Number(value))) return '-';
+  const numeric = Number(value);
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(digits)}`;
+}
+
 function scopeLabel(scope: WorkspaceNoteScope): string {
   if (scope === 'event') return 'Event note';
   if (scope === 'team') return 'Team note';
   return 'Match note';
+}
+
+function renderTeamStrip(teamKeys: string[], highlightedKey: string | null, tone: 'red' | 'blue') {
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+      {teamKeys.map((teamKey) => {
+        const highlighted = teamKey === highlightedKey;
+        return (
+          <span
+            key={teamKey}
+            className={`badge ${highlighted ? 'badge-blue' : ''}`}
+            style={{
+              background: highlighted
+                ? undefined
+                : tone === 'red'
+                  ? 'rgba(239, 68, 68, 0.12)'
+                  : 'rgba(59, 130, 246, 0.12)',
+              borderColor: tone === 'red' ? 'rgba(239, 68, 68, 0.24)' : 'rgba(59, 130, 246, 0.24)',
+            }}
+          >
+            {teamKey}
+            {highlighted ? ' • Rival' : ''}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function DeskOpsPanel({
@@ -322,6 +360,113 @@ export default function DeskOpsPanel({
                 {ops?.sourceTrust?.missingCount ?? 0} | Stale{' '}
                 {ops?.sourceTrust?.staleSeconds ?? '-'}s
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Why This Match Matters</div>
+            {ops?.impactSummary ? (
+              <div className="stack-8">
+                <div className="panel-2" style={{ padding: 12 }}>
+                  <div style={{ fontWeight: 800 }}>
+                    {ops.impactSummary.selectedMatchLabel ?? 'Next match'}
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Projected band {ops.impactSummary.projectedBand} | Best at{' '}
+                    {ops.impactSummary.projectedBestRankRp ?? '-'} RP | Floor at{' '}
+                    {ops.impactSummary.projectedWorstRankRp ?? '-'} RP
+                  </div>
+                </div>
+                {(ops.impactSummary.quickCalls ?? []).map((line) => (
+                  <div key={line} className="panel-2" style={{ padding: 10 }}>
+                    <div className="muted">{line}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="muted">No impact summary yet for the loaded target.</div>
+            )}
+            <div className="panel-2" style={{ padding: 12, marginTop: 12 }}>
+              <div style={{ fontWeight: 800 }}>Field timing</div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                {ops?.delayDiagnostics?.summary ?? 'No field-delay estimate yet.'}
+              </div>
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                Queue ETA {fmtTimestamp(ops?.delayDiagnostics?.estimatedQueueTimeMs ?? null)} | On
+                deck {fmtTimestamp(ops?.delayDiagnostics?.estimatedOnDeckTimeMs ?? null)} | Start{' '}
+                {fmtTimestamp(ops?.delayDiagnostics?.estimatedStartTimeMs ?? null)} | Lag{' '}
+                {ops?.delayDiagnostics?.fieldLagMinutes ?? '-'} min
+              </div>
+            </div>
+          </div>
+          <div className="panel" style={{ padding: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Rival Pressure + Watchlist</div>
+            <div className="stack-8">
+              {(ops?.rivalPressure ?? []).slice(0, 6).map((row) => (
+                <div
+                  key={row.teamKey}
+                  className="panel-2"
+                  style={{
+                    padding: 10,
+                    background: row.isLoadedTeam ? '#132033' : undefined,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontWeight: 800 }}>
+                      {row.teamNumber ?? '-'} {row.nickname || row.teamKey}
+                      {row.isLoadedTeam ? (
+                        <span className="badge badge-blue" style={{ marginLeft: 8 }}>
+                          Us
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="muted">Rank {row.rank ?? '-'}</div>
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    TOTAL RP {row.totalRp ?? '-'} | Gap {fmtSigned(row.gapToUs, 1)} | Composite{' '}
+                    {row.composite != null ? row.composite.toFixed(1) : '-'}
+                  </div>
+                </div>
+              ))}
+              {!ops?.rivalPressure?.length ? (
+                <div className="muted">No rival pressure band surfaced yet.</div>
+              ) : null}
+            </div>
+            <div className="stack-8" style={{ marginTop: 12 }}>
+              {(ops?.keyMatchWatchlist ?? []).slice(0, 4).map((row) => (
+                <div key={row.matchKey} className="panel-2" style={{ padding: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontWeight: 800 }}>{row.matchLabel}</div>
+                    <div className="muted" style={{ textAlign: 'right' }}>
+                      <div>
+                        Red {fmtPct(row.redWinProb)} | Blue {fmtPct(row.blueWinProb)}
+                      </div>
+                      <div style={{ fontSize: 11, marginTop: 2 }}>
+                        Rival {row.rivalTeamNumber ?? row.rivalTeamKey ?? '-'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Red alliance
+                  </div>
+                  {renderTeamStrip(row.redTeams, row.rivalTeamKey, 'red')}
+                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                    Blue alliance
+                  </div>
+                  {renderTeamStrip(row.blueTeams, row.rivalTeamKey, 'blue')}
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Pred score R {row.redScore ?? '-'} / B {row.blueScore ?? '-'}
+                  </div>
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {row.narrative}
+                  </div>
+                </div>
+              ))}
+              {!ops?.keyMatchWatchlist?.length ? (
+                <div className="muted">No key watchlist matches yet.</div>
+              ) : null}
             </div>
           </div>
         </div>
