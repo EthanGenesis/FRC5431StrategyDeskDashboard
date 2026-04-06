@@ -25,9 +25,11 @@ import {
 } from '../lib/shared-workspace-browser';
 import { createSupabaseBrowserClient } from '../lib/supabase-browser';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { useWorkspacePresence } from '../lib/use-workspace-presence';
 import { getEventWorkspaceKey } from '../lib/workspace-key';
 import StrategyBoard from './StrategyBoard';
 import DisclosureSection from './ui/DisclosureSection';
+import WorkspacePresencePills from './ui/WorkspacePresencePills';
 const RED_MARKER_Y = [120, 250, 380];
 const BLUE_MARKER_Y = [120, 250, 380];
 function cloneValue(value) {
@@ -163,6 +165,7 @@ export default function StrategyWorkspace({
   onTargetChange,
   onOpenTeamProfile,
   onAddToCompare,
+  operatorLabel = '',
 }) {
   const [eventContext, setEventContext] = useState(null);
   const [contextLoading, setContextLoading] = useState(false);
@@ -224,6 +227,14 @@ export default function StrategyWorkspace({
     () => buildCurrentContext(currentSnapshot ?? null, currentEventKey),
     [currentSnapshot, currentEventKey],
   );
+  const strategyPresence = useWorkspacePresence({
+    workspaceKey: strategyWorkspaceKey,
+    surface: 'strategy_workspace',
+    artifactId: strategyMeta?.id ?? null,
+    operatorLabel: operatorLabel || null,
+    mode: strategyMeta?.id ? 'editing' : 'viewing',
+    enabled: Boolean(strategyWorkspaceKey),
+  });
   useEffect(() => {
     if (!strategyWorkspaceKey) {
       setSavedStrategies([]);
@@ -1219,6 +1230,35 @@ export default function StrategyWorkspace({
           style={{ display: 'none' }}
           onChange={handleImportFile}
         />
+      </div>
+
+      <div className="panel strategy-screen-only" style={{ padding: 12 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 10,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900 }}>Collaboration Presence</div>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Live presence is advisory only. Saves stay last-write-wins, but this helps avoid
+              stepping on each other.
+            </div>
+          </div>
+          <WorkspacePresencePills
+            entries={strategyPresence.otherEntries}
+            emptyLabel="No other operators are editing this strategy record right now."
+          />
+        </div>
+        {strategyPresence.hasConflict ? (
+          <div className="badge badge-yellow" style={{ marginTop: 10 }}>
+            Another operator is actively editing this same strategy record.
+          </div>
+        ) : null}
       </div>
 
       <div className="panel strategy-print-header" style={{ padding: 16 }}>

@@ -84,6 +84,29 @@ test('major scope tabs and preserved troubleshooting UI are reachable', async ({
   expect(pageErrors).toEqual([]);
 });
 
+test('pit mode, notebook, and finish-line settings surfaces are reachable', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'NOTEBOOK' }).click();
+  await expect(
+    page.locator('.page-header-title').filter({ hasText: 'Analyst Notebook' }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'SETTINGS' }).click();
+  await expect(page.getByText('Desk Health', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Rehearsal Mode', { exact: true }).first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'PIT', exact: true }).click();
+  await expect(page.locator('.pit-mode-overlay')).toBeVisible();
+  await expect(page.locator('.pit-mode-kicker').filter({ hasText: 'Pit Mode' })).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.pit-mode-overlay')).toBeHidden();
+
+  await page.goto('/?pit=1');
+  await expect(page.locator('.pit-mode-overlay')).toBeVisible();
+});
+
 test.describe('mobile boot', () => {
   test.use({
     viewport: { width: 390, height: 844 },

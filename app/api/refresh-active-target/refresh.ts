@@ -8,6 +8,7 @@ import { GET as getGameManualRoute } from '../game-manual/route';
 import { POST as postImpactBundleRoute } from '../impact-bundle/route';
 import { GET as getPickListAnalysisRoute } from '../pick-list-analysis/route';
 import { POST as postPickListBundleRoute } from '../pick-list-bundle/route';
+import { GET as getPitOpsRoute } from '../pit-ops/route';
 import { POST as postPlayoffBundleRoute } from '../playoff-bundle/route';
 import { GET as getPlayoffSummaryRoute } from '../playoff-summary/route';
 import { GET as getPreEventScoutRoute } from '../pre-event-scout/route';
@@ -333,6 +334,13 @@ export async function refreshSharedTargetCaches(): Promise<SharedTargetRefreshRe
         `${baseUrl}/api/team-dossier?team=${encodeURIComponent(String(target.teamNumber))}&eventKey=${encodeURIComponent(target.eventKey)}`,
       ),
     ).then((result) => ['team_dossier', result] as const),
+    invokeRoute(
+      'pit_ops',
+      getPitOpsRoute,
+      new Request(
+        `${baseUrl}/api/pit-ops?team=${encodeURIComponent(String(target.teamNumber))}&eventKey=${encodeURIComponent(target.eventKey)}`,
+      ),
+    ).then((result) => ['pit_ops', result] as const),
     invokeRoute(
       'compare_bundle',
       postCompareBundleRoute,

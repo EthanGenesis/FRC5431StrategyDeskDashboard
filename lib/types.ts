@@ -433,6 +433,153 @@ export type DeskOpsResponse = {
   keyMatchWatchlist: DeskOpsKeyMatchWatchRow[];
 };
 
+export type PitTimelineTurnaroundRow = {
+  kind: 'turnaround';
+  id: string;
+  fromMatchKey: string;
+  toMatchKey: string;
+  fromLabel: string;
+  toLabel: string;
+  durationMs: number | null;
+  durationLabel: string;
+};
+
+export type PitTimelineMatchRow = {
+  kind: 'match';
+  id: string;
+  matchKey: string;
+  label: string;
+  compLevel: MatchSimple['comp_level'];
+  setNumber: number;
+  matchNumber: number;
+  timeMs: number | null;
+  countdownMs: number | null;
+  state: 'completed' | 'playing_now' | 'upcoming';
+  isLoadedTeamMatch: boolean;
+  allianceColor: AllianceColor | null;
+  teamKeys: string[];
+};
+
+export type PitTimelineRow = PitTimelineTurnaroundRow | PitTimelineMatchRow;
+
+export type PitOpsResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string | null;
+  eventName: string | null;
+  teamNumber: number | null;
+  currentMatchLabel: string | null;
+  nextMatchLabel: string | null;
+  countdownMs: number | null;
+  bumperColor: string | null;
+  allianceColor: AllianceColor | null;
+  queueState: string | null;
+  queueMatchesAway: number | null;
+  queueLadder: QueueLadderStep[];
+  pitAddress: string | null;
+  inspectionStatus: string | null;
+  estimatedQueueTimeMs: number | null;
+  estimatedOnDeckTimeMs: number | null;
+  estimatedOnFieldTimeMs: number | null;
+  estimatedStartTimeMs: number | null;
+  timeline: PitTimelineRow[];
+};
+
+export type DeskHealthRouteSummary = {
+  routeKey: string;
+  sampleCount: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  errorCount: number;
+  latestStatusCode: number | null;
+  latestCacheState: string | null;
+  latestAtMs: number | null;
+};
+
+export type DeskHealthRecentFailure = {
+  routeKey: string;
+  statusCode: number;
+  durationMs: number;
+  cacheState: string | null;
+  createdAtMs: number | null;
+  detail: string | null;
+};
+
+export type CacheInspectorSurface = {
+  id: string;
+  label: string;
+  source: string;
+  kind: 'hot' | 'snapshot' | 'bundle';
+  state: string | null;
+  cacheLayer: string | null;
+  cacheState: string | null;
+  bundleKey: string | null;
+  etag: string | null;
+  generatedAt: string | null;
+  updatedAt: string | null;
+  freshUntil: string | null;
+  staleUntil: string | null;
+  error: string | null;
+};
+
+export type CacheInspectorResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+  surfaces: CacheInspectorSurface[];
+};
+
+export type CacheRefreshSurfaceResult = {
+  surface: string;
+  ok: boolean;
+  status: number | null;
+  generatedAtMs: number | null;
+  error: string | null;
+};
+
+export type CacheRefreshResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+  results: CacheRefreshSurfaceResult[];
+};
+
+export type DeskHealthResponse = {
+  generatedAtMs: number;
+  workspaceKey: string;
+  eventKey: string | null;
+  teamNumber: number | null;
+  refreshState: string | null;
+  lastSuccessAt: string | null;
+  sourceTrust: DeskOpsSourceTrust | null;
+  bundleStateCounts: Record<string, number>;
+  cacheStateCounts: Record<string, number>;
+  paritySummary: Record<'match' | 'diff' | 'error' | 'skipped', number>;
+  recentFailures: DeskHealthRecentFailure[];
+  routeSummaries: DeskHealthRouteSummary[];
+  staleOrErrorSurfaces: {
+    source: string;
+    state: string;
+    generatedAt: string | null;
+    updatedAt: string | null;
+    error: string | null;
+  }[];
+};
+
+export type WorkspacePresenceMode = 'viewing' | 'editing';
+
+export type WorkspacePresenceEntry = {
+  sessionId: string;
+  workspaceKey: string;
+  surface: string;
+  artifactId: string | null;
+  mode: WorkspacePresenceMode;
+  operatorLabel: string | null;
+  joinedAtMs: number;
+};
+
 export type TeamDossierRoleMetric = {
   label: string;
   value: number | null;
