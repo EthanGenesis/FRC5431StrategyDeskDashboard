@@ -51,7 +51,7 @@
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.2",
     "dependency-cruiser": "^17.3.10",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "16.2.1",
     "eslint-config-prettier": "^10.1.8",
     "jsdom": "^29.0.1",
