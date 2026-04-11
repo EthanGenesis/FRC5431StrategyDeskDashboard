@@ -21,7 +21,7 @@ jobs:
         language: ['javascript-typescript']
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
       - uses: actions/setup-node@v4
@@ -32,4 +32,4 @@ jobs:
       - run: npm run build
         env:
           TBA_AUTH_KEY: codeql-placeholder-key
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
